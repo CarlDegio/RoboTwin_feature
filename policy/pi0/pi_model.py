@@ -6,6 +6,7 @@
 import json
 import sys
 import jax
+import os
 import numpy as np
 from openpi.models import model as _model
 from openpi.policies import aloha_policy

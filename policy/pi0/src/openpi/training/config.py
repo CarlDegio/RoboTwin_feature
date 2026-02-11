@@ -323,14 +323,14 @@ class TrainConfig:
     batch_size: int = 32
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
-    num_workers: int = 2
+    num_workers: int = 8
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
-    save_interval: int = 1000
+    save_interval: int = 10000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
@@ -383,7 +383,7 @@ _CONFIGS = [
         name="pi0_base_aloha_robotwin_lora",
         model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
         data=LeRobotAlohaDataConfig(
-            repo_id="test",  # your datasets repo_id
+            repo_id="pi4task",  # your datasets repo_id
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(inputs=[
                 _transforms.RepackTransform({
@@ -414,7 +414,7 @@ _CONFIGS = [
         name="pi0_fast_aloha_robotwin_lora",
         model=pi0_fast.Pi0FASTConfig(paligemma_variant="gemma_2b_lora"),
         data=LeRobotAlohaDataConfig(
-            repo_id="your_repo_id",  # your datasets repo_id
+            repo_id="pi4task",  # your datasets repo_id
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(inputs=[
                 _transforms.RepackTransform({
@@ -446,7 +446,7 @@ _CONFIGS = [
         name="pi0_base_aloha_robotwin_full",
         model=pi0.Pi0Config(),
         data=LeRobotAlohaDataConfig(
-            repo_id="your_repo_id",  # your datasets repo_id
+            repo_id="pi4task",  # your datasets repo_id
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(inputs=[
                 _transforms.RepackTransform({
@@ -476,7 +476,7 @@ _CONFIGS = [
         name="pi0_fast_aloha_robotwin_full",
         model=pi0_fast.Pi0FASTConfig(),
         data=LeRobotAlohaDataConfig(
-            repo_id="your_repo_id",  # your datasets repo_id
+            repo_id="pi4task",  # your datasets repo_id
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(inputs=[
                 _transforms.RepackTransform({
@@ -499,7 +499,7 @@ _CONFIGS = [
         batch_size=32,
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
         num_train_steps=30000,
-        fsdp_devices=1,  # refer line 359
+        fsdp_devices=4,  # refer line 359
     ),
 ]
 
