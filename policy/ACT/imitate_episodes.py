@@ -25,7 +25,7 @@ from utils import compute_dict_mean, set_seed, detach_dict  # helper functions
 from act_policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
 
-from sim_env import BOX_POSE
+# from sim_env import BOX_POSE
 
 import IPython
 
@@ -65,7 +65,7 @@ def main(args):
     backbone = "resnet18"
     if policy_class == "ACT":
         enc_layers = 4
-        dec_layers = 7
+        dec_layers = 1
         nheads = 8
         policy_config = {
             "lr": args["lr"],

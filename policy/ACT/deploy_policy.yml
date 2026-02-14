@@ -30,7 +30,7 @@ dilation: false
 backbone: resnet18
 nheads: 8
 enc_layers: 4
-dec_layers: 7
+dec_layers: 1
 pre_norm: false
 dropout: 0.1
 camera_names:
