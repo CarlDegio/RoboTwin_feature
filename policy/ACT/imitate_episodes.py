@@ -65,7 +65,7 @@ def main(args):
     backbone = "resnet18"
     if policy_class == "ACT":
         enc_layers = 4
-        dec_layers = 1
+        dec_layers = 4
         nheads = 8
         policy_config = {
             "lr": args["lr"],
