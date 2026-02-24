@@ -30,3 +30,6 @@ envs/curobo/*
 /*.txt
 
 training_data/
+
+.1code/
+.omc/
