@@ -1,0 +1,44 @@
+# PPO hyperparameters for ACT-RL fine-tuning
+# Reference: ACT-RL paper + RLinf PPO implementation
+
+# === PPO Core ===
+clip_ratio: 0.1              # PPO clip epsilon (conservative for frozen backbone)
+gamma: 0.995                 # Discount factor
+gae_lambda: 0.95             # GAE smoothing parameter
+vf_coef: 0.5                 # Value function loss coefficient
+entropy_coef: 0.0            # Entropy bonus coefficient
+kl_beta: 0.05                # KL divergence penalty coefficient
+value_clip: 0.2              # Value function clipping range
+
+# === Training ===
+lr: 1.0e-5                   # Learning rate (conservative)
+max_grad_norm: 0.5           # Gradient clipping max norm
+update_epochs: 1             # PPO update epochs per rollout batch
+n_minibatches: 5             # Number of minibatches per update epoch
+normalize_advantages: true   # Normalize advantages to zero mean, unit variance
+
+# === Rollout ===
+num_episodes_per_iter: 1     # Episodes to collect per PPO iteration
+max_chunks_per_episode: 20   # Max chunk executions per episode (step_lim / chunk_size)
+
+# === Training Schedule ===
+total_iterations: 3        # Total PPO iterations
+eval_freq: 20                # Evaluate every N iterations
+save_freq: 50                # Save checkpoint every N iterations
+log_freq: 1                  # Log metrics every N iterations
+
+# === Reward ===
+success_reward: 1.0          # Reward for successful episode
+failure_reward: -1.0         # Reward for failed episode
+intermediate_reward: 0.0     # Reward for intermediate chunks (sparse)
+
+# === Reference Policy ===
+ref_std: 0.1                # Fixed std for reference ACT policy (original has no learned std)
+
+# === Action Distribution ===
+log_std_min: -5.0            # Min log-std clamp
+log_std_max: 0.0             # Max log-std clamp
+
+# === Misc ===
+seed: 0
+device: "cuda:0"
