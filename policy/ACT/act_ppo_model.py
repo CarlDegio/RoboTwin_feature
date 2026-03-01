@@ -152,11 +152,13 @@ class ACTPPOModel(nn.Module):
         )
 
     def train(self, mode=True):
-        """Override train() to keep frozen ResNet backbone in eval mode.
-        ResNet has BatchNorm that must stay in eval mode to preserve statistics."""
+        """Override train() to keep entire act_model in eval mode.
+        This ensures dropout is disabled so that forward pass is deterministic,
+        matching rollout (eval mode) behavior during PPO update.
+        Grad still flows through trainable params regardless of eval mode.
+        Only new heads (value_head, log_std_head) enter train mode."""
         super().train(mode)
-        if self.act_model.backbones is not None:
-            self.act_model.backbones.eval()  # Only keep backbone in eval
+        self.act_model.eval()  # Keep all of ACT in eval (no dropout)
         return self
 
     def _get_decoder_hidden(self, qpos, image):

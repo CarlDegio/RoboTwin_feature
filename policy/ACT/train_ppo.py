@@ -206,7 +206,7 @@ def collect_rollouts(
 
             # Store transition (reward assigned later)
             trans = ChunkTransition(
-                qpos=obs_dict["qpos"].copy(),
+                qpos=qpos.squeeze(0).cpu().numpy(),  # normalized qpos
                 images=np.stack([
                     obs_dict["head_cam"], obs_dict["left_cam"], obs_dict["right_cam"],
                 ], axis=0),
@@ -361,7 +361,7 @@ def evaluate_policy(model, TASK_ENV, env_args, ppo_config, seed_start, device="c
     from envs.utils.create_actor import UnStableError
     from generate_episode_instructions import generate_episode_descriptions
 
-    num_eval = 10
+    num_eval = 20
     chunk_size = model.chunk_size
     max_chunks = ppo_config.get("max_chunks_per_episode", 60)
     now_seed = seed_start
@@ -581,6 +581,7 @@ def main(args):
                 f"vloss={update_info.get('value_loss', 0):.4f} "
                 f"kl={update_info.get('kl_loss', 0):.4f} "
                 f"clip={update_info.get('clip_fraction', 0):.3f} "
+                f"entropy={update_info.get('entropy', 0):.4f} "
                 f"time={iter_time:.1f}s "
                 f"RAM={mem_used_gb:.1f}/{mem_total_gb:.1f}GB "
                 f"VRAM={gpu_mem_used_gb:.1f}/{gpu_mem_total_gb:.1f}GB"

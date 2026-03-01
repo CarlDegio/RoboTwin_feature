@@ -173,7 +173,7 @@ def compute_total_loss(
     # Compute log_prob and entropy from the distribution
     new_log_probs = model._compute_log_prob(actions, mu_cur, std_cur)
     dist = torch.distributions.Normal(mu_cur, std_cur)
-    entropy = dist.entropy().sum(dim=-1).sum(dim=-1)  # (batch,)
+    entropy = dist.entropy().mean(dim=-1).mean(dim=-1)  # (batch,)
 
     # PPO clipped loss
     policy_loss, clip_frac, approx_kl = compute_ppo_loss(

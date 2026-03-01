@@ -6,23 +6,23 @@ clip_ratio: 0.1              # PPO clip epsilon (conservative for frozen backbon
 gamma: 0.995                 # Discount factor
 gae_lambda: 0.95             # GAE smoothing parameter
 vf_coef: 0.5                 # Value function loss coefficient
-entropy_coef: 0.0            # Entropy bonus coefficient
+entropy_coef: 0.01            # Entropy bonus coefficient
 kl_beta: 0.05                # KL divergence penalty coefficient
 value_clip: 0.2              # Value function clipping range
 
 # === Training ===
-lr: 1.0e-5                   # Learning rate (conservative)
+lr: 3.0e-5                   # Learning rate (conservative)
 max_grad_norm: 0.5           # Gradient clipping max norm
 update_epochs: 1             # PPO update epochs per rollout batch
 n_minibatches: 5             # Number of minibatches per update epoch
 normalize_advantages: true   # Normalize advantages to zero mean, unit variance
 
 # === Rollout ===
-num_episodes_per_iter: 1     # Episodes to collect per PPO iteration
+num_episodes_per_iter: 10     # Episodes to collect per PPO iteration
 max_chunks_per_episode: 20   # Max chunk executions per episode (step_lim / chunk_size)
 
 # === Training Schedule ===
-total_iterations: 3        # Total PPO iterations
+total_iterations: 200        # Total PPO iterations
 eval_freq: 20                # Evaluate every N iterations
 save_freq: 50                # Save checkpoint every N iterations
 log_freq: 1                  # Log metrics every N iterations
