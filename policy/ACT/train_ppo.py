@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../script"))
 from act_ppo_model import ACTPPOModel, ACTPPOReferenceModel
 from ppo_algorithm import compute_gae, compute_total_loss
 from ppo_rollout import RolloutBuffer, ChunkTransition, encode_obs, obs_to_tensors
+from ppo_parallel import parallel_collect_rollouts, parallel_evaluate_policy
 
 
 def set_seed(seed):
@@ -488,10 +489,13 @@ def main(args):
     )
     os.makedirs(ppo_ckpt_dir, exist_ok=True)
 
+    num_workers = ppo_config.get("num_workers", 1)
+
     print("=" * 60)
     print(f"ACT-PPO Training: {task_name}")
     print(f"ACT checkpoint: {act_ckpt_dir}")
     print(f"PPO output: {ppo_ckpt_dir}")
+    print(f"Parallel workers: {num_workers}")
     print("=" * 60)
 
     # Build ACT-PPO model
@@ -543,10 +547,17 @@ def main(args):
 
         # === 1. Collect rollouts ===
         print(f"[Iter {iteration}/{total_iters}] Collecting rollouts...")
-        now_seed, rollout_stats = collect_rollouts(
-            model, TASK_ENV, env_args, ppo_config,
-            rollout_buffer, now_seed, device,
-        )
+        if num_workers > 1:
+            now_seed, rollout_stats = parallel_collect_rollouts(
+                model, act_config, ppo_config, env_args,
+                task_name, task_config_name,
+                rollout_buffer, now_seed, device, num_workers,
+            )
+        else:
+            now_seed, rollout_stats = collect_rollouts(
+                model, TASK_ENV, env_args, ppo_config,
+                rollout_buffer, now_seed, device,
+            )
 
         if len(rollout_buffer) == 0:
             print(f"  No transitions collected, skipping update")
@@ -593,10 +604,17 @@ def main(args):
         # === 4. Evaluation ===
         if iteration % eval_freq == 0:
             print(f"[Iter {iteration}] Evaluating...")
-            eval_sr = evaluate_policy(
-                model, TASK_ENV, env_args, ppo_config,
-                eval_seed, device,
-            )
+            if num_workers > 1:
+                eval_sr = parallel_evaluate_policy(
+                    model, act_config, ppo_config, env_args,
+                    task_name, task_config_name,
+                    eval_seed, device, num_workers,
+                )
+            else:
+                eval_sr = evaluate_policy(
+                    model, TASK_ENV, env_args, ppo_config,
+                    eval_seed, device,
+                )
             eval_msg = f"[Eval Iter {iteration}] success_rate={eval_sr:.2f}"
             print(eval_msg)
             log_file.write(eval_msg + "\n")

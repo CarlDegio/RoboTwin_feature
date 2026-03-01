@@ -7,7 +7,7 @@ gamma: 0.995                 # Discount factor
 gae_lambda: 0.95             # GAE smoothing parameter
 vf_coef: 0.5                 # Value function loss coefficient
 entropy_coef: 0.01            # Entropy bonus coefficient
-kl_beta: 0.05                # KL divergence penalty coefficient
+kl_beta: 0.01                # KL divergence penalty coefficient
 value_clip: 0.2              # Value function clipping range
 
 # === Training ===
@@ -33,11 +33,14 @@ failure_reward: -1.0         # Reward for failed episode
 intermediate_reward: 0.0     # Reward for intermediate chunks (sparse)
 
 # === Reference Policy ===
-ref_std: 0.1                # Fixed std for reference ACT policy (original has no learned std)
+ref_std: 0.05                # Fixed std for reference ACT policy (original has no learned std)
 
 # === Action Distribution ===
 log_std_min: -5.0            # Min log-std clamp
-log_std_max: 0.0             # Max log-std clamp
+log_std_max: -2.0             # Max log-std clamp
+
+# === Parallelization ===
+num_workers: 5               # 并行collect/eval的最大worker数量 (1=串行, >1=多进程并行)
 
 # === Misc ===
 seed: 0
