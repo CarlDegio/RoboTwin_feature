@@ -112,6 +112,7 @@ bash eval_ppo.sh stack_bowls_two demo_clean demo_clean 50 0 0
 | `ref_std` | 0.01 | 参考策略的固定标准差 |
 | `success_reward` | 1.0 | 成功奖励 |
 | `failure_reward` | -1.0 | 失败奖励 |
+| `num_workers` | 1 | 并行收集/评估的最大worker数量（1=串行，>1=多进程并行） |
 
 ---
 
@@ -336,4 +337,71 @@ for iteration = 1 to 500:
 ```
 
 注意：推理时不使用时序集成（temporal ensemble），每次输出完整的 50 步动作块并全部执行。
+
+---
+
+## 5. 并行化加速
+
+### 5.1 概述
+
+ACT-PPO 的训练瓶颈主要在 Rollout 收集和策略评估阶段，这两个阶段需要与仿真环境交互，耗时较长且完全串行执行。通过 Python `multiprocessing` 实现这两个阶段的并行化，可以显著提高训练效率。
+
+核心思路：每个 worker 进程创建独立的模型副本（推理模式，不更新参数）和环境实例，并行执行多个 episode 的数据收集或评估。
+
+### 5.2 架构设计
+
+```
+主进程 (PPO训练循环)
+  │
+  ├── 1. 并行 Rollout 收集 (parallel_collect_rollouts)
+  │   ├── Worker 0: 收集 episodes [0, k)，seed 范围 [s0, s0+k)
+  │   ├── Worker 1: 收集 episodes [k, 2k)，seed 范围 [s0+k, s0+2k)
+  │   └── Worker N: 收集 episodes [(N-1)k, ...]
+  │   → 合并所有 ChunkTransitions 到 RolloutBuffer
+  │
+  ├── 2. PPO 更新 (串行，主进程，需要梯度计算)
+  │
+  └── 3. 并行评估 (parallel_evaluate_policy，每 eval_freq 次迭代)
+      ├── Worker 0: 评估 episodes [0, m)
+      ├── Worker 1: 评估 episodes [m, 2m)
+      └── Worker N: 评估 episodes [(N-1)m, ...]
+      → 合并成功率统计
+```
+
+### 5.3 配置参数
+
+在 `ppo_config.yml` 中配置：
+
+```yaml
+# === Parallelization ===
+num_workers: 1    # 并行 worker 数量 (1=串行, >1=多进程并行)
+```
+
+| 值 | 行为 |
+|----|------|
+| `1`（默认） | 使用原始串行代码路径，行为完全不变 |
+| `2-4` | 推荐范围，使用多进程并行收集和评估 |
+| `>4` | 需要充足的 GPU 显存和 CPU 资源 |
+
+### 5.4 工作原理
+
+1. **模型复制**：主进程将当前模型的 `state_dict` 传递给各 worker，每个 worker 创建独立的 `ACTPPOModel` 并加载权重，设置为 `eval()` 模式
+2. **环境隔离**：每个 worker 创建独立的 `TASK_ENV` 仿真环境实例，互不干扰
+3. **Seed 分配**：episodes 均匀分配给各 worker，每个 worker 使用不重叠的 seed 范围，避免重复环境
+4. **结果合并**：所有 worker 的 transitions/评估结果在主进程中合并
+
+### 5.5 GPU 显存考虑
+
+每个 worker 进程会在 GPU 上加载一份模型用于推理（前向传播），因此：
+
+- **显存占用** ≈ `num_workers × 单模型显存`（推理模式下约 200-400MB/模型）
+- **建议配置**：
+  - 8GB 显存：`num_workers: 2-3`
+  - 16GB 显存：`num_workers: 3-4`
+  - 24GB+ 显存：`num_workers: 4-6`
+
+### 5.6 向后兼容性
+
+- `num_workers: 1`（默认值）时，使用原始的 `collect_rollouts()` 和 `evaluate_policy()` 串行函数，行为与修改前完全一致
+- PPO 参数更新始终在主进程串行执行，不受 `num_workers` 影响
 

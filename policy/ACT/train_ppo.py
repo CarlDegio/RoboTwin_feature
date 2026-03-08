@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../script"))
 from act_ppo_model import ACTPPOModel, ACTPPOReferenceModel
 from ppo_algorithm import compute_gae, compute_total_loss
 from ppo_rollout import RolloutBuffer, ChunkTransition, encode_obs, obs_to_tensors
-from ppo_parallel import parallel_collect_rollouts, parallel_evaluate_policy
+from ppo_parallel import parallel_collect_rollouts, parallel_evaluate_policy, PersistentWorkerPool
 
 
 def set_seed(seed):
@@ -490,12 +490,17 @@ def main(args):
     os.makedirs(ppo_ckpt_dir, exist_ok=True)
 
     num_workers = ppo_config.get("num_workers", 1)
+    persistent_pool = bool(ppo_config.get("persistent_pool", True))
+    worker_command_timeout_sec = float(ppo_config.get("worker_command_timeout_sec", 300.0))
+    worker_shutdown_timeout_sec = float(ppo_config.get("worker_shutdown_timeout_sec", 30.0))
 
     print("=" * 60)
     print(f"ACT-PPO Training: {task_name}")
     print(f"ACT checkpoint: {act_ckpt_dir}")
     print(f"PPO output: {ppo_ckpt_dir}")
     print(f"Parallel workers: {num_workers}")
+    if num_workers > 1:
+        print(f"Persistent pool: {persistent_pool}")
     print("=" * 60)
 
     # Build ACT-PPO model
@@ -540,107 +545,149 @@ def main(args):
     log_path = os.path.join(ppo_ckpt_dir, "training_log.txt")
     log_file = open(log_path, "w")
 
-    print(f"\n[ACT-PPO] Starting training for {total_iters} iterations\n")
+    runtime_pool = None
 
-    for iteration in range(1, total_iters + 1):
-        iter_start = time.time()
-
-        # === 1. Collect rollouts ===
-        print(f"[Iter {iteration}/{total_iters}] Collecting rollouts...")
-        if num_workers > 1:
-            now_seed, rollout_stats = parallel_collect_rollouts(
-                model, act_config, ppo_config, env_args,
-                task_name, task_config_name,
-                rollout_buffer, now_seed, device, num_workers,
-            )
-        else:
-            now_seed, rollout_stats = collect_rollouts(
-                model, TASK_ENV, env_args, ppo_config,
-                rollout_buffer, now_seed, device,
+    try:
+        if num_workers > 1 and persistent_pool:
+            runtime_pool = PersistentWorkerPool(
+                num_workers=num_workers,
+                act_config=act_config,
+                ppo_config=ppo_config,
+                env_args=env_args,
+                task_name=task_name,
+                task_config_name=task_config_name,
+                device_str=str(device),
+                command_timeout_sec=worker_command_timeout_sec,
+                shutdown_timeout_sec=worker_shutdown_timeout_sec,
             )
 
-        if len(rollout_buffer) == 0:
-            print(f"  No transitions collected, skipping update")
-            continue
+        print(f"\n[ACT-PPO] Starting training for {total_iters} iterations\n")
 
-        # === 2. PPO update ===
-        model.train()
-        update_info = ppo_update(
-            model, ref_model, optimizer,
-            rollout_buffer, ppo_config, device,
-        )
-        model.eval()
+        for iteration in range(1, total_iters + 1):
+            iter_start = time.time()
 
-        iter_time = time.time() - iter_start
-
-        # === 3. Logging ===
-        if iteration % log_freq == 0:
-            # System memory
-            mem = psutil.virtual_memory()
-            mem_used_gb = mem.used / (1024 ** 3)
-            mem_total_gb = mem.total / (1024 ** 3)
-            # GPU memory
-            gpu_mem_used_gb = torch.cuda.memory_reserved(device) / (1024 ** 3)
-            gpu_mem_total_gb = torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)
-
-            log_msg = (
-                f"[Iter {iteration}] "
-                f"success={rollout_stats['success_rate']:.2f} "
-                f"return={rollout_stats['avg_return']:.2f} "
-                f"chunks={rollout_stats['total_chunks']} "
-                f"ploss={update_info.get('policy_loss', 0):.4f} "
-                f"vloss={update_info.get('value_loss', 0):.4f} "
-                f"kl={update_info.get('kl_loss', 0):.4f} "
-                f"clip={update_info.get('clip_fraction', 0):.3f} "
-                f"entropy={update_info.get('entropy', 0):.4f} "
-                f"time={iter_time:.1f}s "
-                f"RAM={mem_used_gb:.1f}/{mem_total_gb:.1f}GB "
-                f"VRAM={gpu_mem_used_gb:.1f}/{gpu_mem_total_gb:.1f}GB"
-            )
-            print(log_msg)
-            log_file.write(log_msg + "\n")
-            log_file.flush()
-
-        # === 4. Evaluation ===
-        if iteration % eval_freq == 0:
-            print(f"[Iter {iteration}] Evaluating...")
+            # === 1. Collect rollouts ===
+            print(f"[Iter {iteration}/{total_iters}] Collecting rollouts...")
             if num_workers > 1:
-                eval_sr = parallel_evaluate_policy(
-                    model, act_config, ppo_config, env_args,
-                    task_name, task_config_name,
-                    eval_seed, device, num_workers,
+                if runtime_pool is not None:
+                    model_state_dict = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+                    runtime_pool.update_weights(model_state_dict=model_state_dict)
+
+                now_seed, rollout_stats = parallel_collect_rollouts(
+                    model,
+                    act_config,
+                    ppo_config,
+                    env_args,
+                    task_name,
+                    task_config_name,
+                    rollout_buffer,
+                    now_seed,
+                    device,
+                    num_workers,
+                    runtime_pool=runtime_pool,
                 )
             else:
-                eval_sr = evaluate_policy(
+                now_seed, rollout_stats = collect_rollouts(
                     model, TASK_ENV, env_args, ppo_config,
-                    eval_seed, device,
+                    rollout_buffer, now_seed, device,
                 )
-            eval_msg = f"[Eval Iter {iteration}] success_rate={eval_sr:.2f}"
-            print(eval_msg)
-            log_file.write(eval_msg + "\n")
-            log_file.flush()
 
-            if eval_sr > best_success_rate:
-                best_success_rate = eval_sr
-                ckpt_path = os.path.join(ppo_ckpt_dir, "policy_best.ckpt")
-                torch.save(model.state_dict(), ckpt_path)
-                print(f"  New best! Saved to {ckpt_path}")
+            if len(rollout_buffer) == 0:
+                print(f"  No transitions collected, skipping update")
+                continue
 
-        # === 5. Checkpoint ===
-        if iteration % save_freq == 0:
-            ckpt_path = os.path.join(
-                ppo_ckpt_dir, f"policy_iter_{iteration}.ckpt",
+            # === 2. PPO update ===
+            model.train()
+            update_info = ppo_update(
+                model, ref_model, optimizer,
+                rollout_buffer, ppo_config, device,
             )
-            torch.save(model.state_dict(), ckpt_path)
-            print(f"  Saved checkpoint: {ckpt_path}")
+            model.eval()
 
-    # Save final checkpoint
-    final_path = os.path.join(ppo_ckpt_dir, "policy_last.ckpt")
-    torch.save(model.state_dict(), final_path)
-    print(f"\nTraining complete. Best success rate: {best_success_rate:.2f}")
-    print(f"Final checkpoint: {final_path}")
+            iter_time = time.time() - iter_start
 
-    log_file.close()
+            # === 3. Logging ===
+            if iteration % log_freq == 0:
+                # System memory
+                mem = psutil.virtual_memory()
+                mem_used_gb = mem.used / (1024 ** 3)
+                mem_total_gb = mem.total / (1024 ** 3)
+                # GPU memory
+                gpu_mem_used_gb = torch.cuda.memory_reserved(device) / (1024 ** 3)
+                gpu_mem_total_gb = torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)
+
+                log_msg = (
+                    f"[Iter {iteration}] "
+                    f"success={rollout_stats['success_rate']:.2f} "
+                    f"return={rollout_stats['avg_return']:.2f} "
+                    f"chunks={rollout_stats['total_chunks']} "
+                    f"ploss={update_info.get('policy_loss', 0):.4f} "
+                    f"vloss={update_info.get('value_loss', 0):.4f} "
+                    f"kl={update_info.get('kl_loss', 0):.4f} "
+                    f"clip={update_info.get('clip_fraction', 0):.3f} "
+                    f"entropy={update_info.get('entropy', 0):.4f} "
+                    f"time={iter_time:.1f}s "
+                    f"RAM={mem_used_gb:.1f}/{mem_total_gb:.1f}GB "
+                    f"VRAM={gpu_mem_used_gb:.1f}/{gpu_mem_total_gb:.1f}GB"
+                )
+                print(log_msg)
+                log_file.write(log_msg + "\n")
+                log_file.flush()
+
+            # === 4. Evaluation ===
+            if iteration % eval_freq == 0:
+                print(f"[Iter {iteration}] Evaluating...")
+                if num_workers > 1:
+                    if runtime_pool is not None:
+                        model_state_dict = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+                        runtime_pool.update_weights(model_state_dict=model_state_dict)
+
+                    eval_sr = parallel_evaluate_policy(
+                        model,
+                        act_config,
+                        ppo_config,
+                        env_args,
+                        task_name,
+                        task_config_name,
+                        eval_seed,
+                        device,
+                        num_workers,
+                        runtime_pool=runtime_pool,
+                    )
+                else:
+                    eval_sr = evaluate_policy(
+                        model, TASK_ENV, env_args, ppo_config,
+                        eval_seed, device,
+                    )
+                eval_msg = f"[Eval Iter {iteration}] success_rate={eval_sr:.2f}"
+                print(eval_msg)
+                log_file.write(eval_msg + "\n")
+                log_file.flush()
+
+                if eval_sr > best_success_rate:
+                    best_success_rate = eval_sr
+                    ckpt_path = os.path.join(ppo_ckpt_dir, "policy_best.ckpt")
+                    torch.save(model.state_dict(), ckpt_path)
+                    print(f"  New best! Saved to {ckpt_path}")
+
+            # === 5. Checkpoint ===
+            if iteration % save_freq == 0:
+                ckpt_path = os.path.join(
+                    ppo_ckpt_dir, f"policy_iter_{iteration}.ckpt",
+                )
+                torch.save(model.state_dict(), ckpt_path)
+                print(f"  Saved checkpoint: {ckpt_path}")
+
+        # Save final checkpoint
+        final_path = os.path.join(ppo_ckpt_dir, "policy_last.ckpt")
+        torch.save(model.state_dict(), final_path)
+        print(f"\nTraining complete. Best success rate: {best_success_rate:.2f}")
+        print(f"Final checkpoint: {final_path}")
+
+    finally:
+        if runtime_pool is not None:
+            runtime_pool.close()
+        log_file.close()
 
 
 if __name__ == "__main__":
