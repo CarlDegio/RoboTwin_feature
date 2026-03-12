@@ -51,7 +51,7 @@ def detect_robot_platform():
 
     if "libero" in cmd_args:
         return "LIBERO"
-    elif "aloha" in cmd_args:
+    elif "aloha" in cmd_args or "robotwin4stack" in cmd_args:
         return "ALOHA"
     elif "bridge" in cmd_args:
         return "BRIDGE"
