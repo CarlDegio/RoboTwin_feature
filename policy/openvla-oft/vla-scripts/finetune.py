@@ -1160,6 +1160,9 @@ def finetune(cfg: FinetuneConfig) -> None:
             {"llm_dim": vla.module.llm_dim},
         )
 
+    if not (cfg.use_l1_regression or cfg.use_diffusion):
+        action_head = None
+    
     # Get number of vision patches
     NUM_PATCHES = (
         vla.module.vision_backbone.get_num_patches()

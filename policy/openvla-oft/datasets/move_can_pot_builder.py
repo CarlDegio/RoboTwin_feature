@@ -81,7 +81,7 @@ def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
             yield path, {"steps": steps, "episode_metadata": {"file_path": path}}
 
 
-class aloha_move_can_pot(MultiThreadedDatasetBuilder):
+class robotwin4stack(MultiThreadedDatasetBuilder):
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release for RoboTwin place_object dataset.",
@@ -148,10 +148,22 @@ class aloha_move_can_pot(MultiThreadedDatasetBuilder):
 
     def _split_paths(self):
         train_files = glob.glob(
-            "path/to/your/preprocessed/train/*.hdf5"
+            "processed_data/stack_blocks_two/train/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_blocks_three/train/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_bowls_two/train/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_bowls_three/train/*.hdf5"
         )
         val_files = glob.glob(
-            "path/to/your/preprocessed/val/*.hdf5"
+            "processed_data/stack_blocks_two/val/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_blocks_three/val/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_bowls_two/val/*.hdf5"
+        )+glob.glob(
+            "processed_data/stack_bowls_three/val/*.hdf5"
         )
 
         print(f"[INFO] Found {len(train_files)} training files")
@@ -164,5 +176,5 @@ class aloha_move_can_pot(MultiThreadedDatasetBuilder):
 
 
 if __name__ == "__main__":
-    builder = aloha_move_can_pot()
+    builder = robotwin4stack()
     builder.download_and_prepare()
