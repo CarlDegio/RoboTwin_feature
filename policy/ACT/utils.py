@@ -4,6 +4,11 @@ import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
 
+try:
+    from action_tokenizer import ActionTokenizer
+except:
+    from .action_tokenizer import ActionTokenizer
+
 import IPython
 
 e = IPython.embed
@@ -11,13 +16,14 @@ e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
 
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, max_action_len):
+    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, max_action_len, tokenizer=None):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
         self.max_action_len = max_action_len
+        self.tokenizer = tokenizer  # ActionTokenizer for discrete tokens
         self.is_sim = None
         self.__getitem__(0)  # initialize self.is_sim
 
@@ -51,10 +57,29 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 action_len = episode_len - max(0, start_ts - 1)  # hack, to make timesteps more aligned
 
         self.is_sim = is_sim
-        padded_action = np.zeros((self.max_action_len, action.shape[1]), dtype=np.float32)  # 根据max_action_len初始化
+        padded_action = np.zeros((self.max_action_len, action.shape[1]), dtype=np.float32)
         padded_action[:action_len] = action
-        is_pad = np.ones(self.max_action_len, dtype=bool)  # 初始化为全1（True）
-        is_pad[:action_len] = 0  # 前action_len个位置设置为0（False），表示非填充部分
+        is_pad = np.ones(self.max_action_len, dtype=bool)
+        is_pad[:action_len] = 0
+
+        # Compute delta actions: delta[0] = action[0] - qpos, delta[t] = action[t] - action[t-1]
+        delta_action = np.zeros_like(padded_action)
+        if action_len > 0:
+            delta_action[0] = padded_action[0] - qpos
+            delta_action[1:action_len] = padded_action[1:action_len] - padded_action[:action_len - 1]
+        # padded positions remain zero
+
+        # Tokenize delta actions
+        if self.tokenizer is not None:
+            action_tokens = self.tokenizer.encode(delta_action)  # (max_action_len, action_dim) int64
+        else:
+            action_tokens = np.zeros((self.max_action_len, padded_action.shape[1]), dtype=np.int64)
+
+        # Normalize delta actions to [-1, 1] for soft-argmax auxiliary loss target
+        if self.tokenizer is not None:
+            delta_action_normalized = self.tokenizer.normalize(delta_action).astype(np.float32)
+        else:
+            delta_action_normalized = delta_action.astype(np.float32)
 
         # new axis for different cameras
         all_cam_images = []
@@ -65,18 +90,20 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # construct observations
         image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
-        action_data = torch.from_numpy(padded_action).float()
+        action_data = torch.from_numpy(delta_action).float()  # continuous delta actions for CVAE encoder
+        action_tokens_data = torch.from_numpy(action_tokens).long()  # discrete targets for CE loss
+        delta_normalized_data = torch.from_numpy(delta_action_normalized).float()  # normalized deltas for aux loss
         is_pad = torch.from_numpy(is_pad).bool()
 
-        # channel last
+        # channel last -> channel first
         image_data = torch.einsum("k h w c -> k c h w", image_data)
 
         # normalize image and change dtype to float
         image_data = image_data / 255.0
-        action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
+        # Normalize qpos (still needed for model input)
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
-        return image_data, qpos_data, action_data, is_pad
+        return image_data, qpos_data, action_data, is_pad, action_tokens_data, delta_normalized_data
 
 
 def get_norm_stats(dataset_dir, num_episodes):
@@ -103,31 +130,14 @@ def get_norm_stats(dataset_dir, num_episodes):
             qpos = torch.cat([qpos, pad], dim=0)
         padded_qpos.append(qpos)
 
-    padded_action = []
-    for action in all_action_data:
-        current_len = action.size(0)
-        if current_len < max_action_len:
-            pad = action[-1:].repeat(max_action_len - current_len, 1)
-            action = torch.cat([action, pad], dim=0)
-        padded_action.append(action)
-
     all_qpos_data = torch.stack(padded_qpos)
-    all_action_data = torch.stack(padded_action)
-    all_action_data = all_action_data
 
-    # normalize action data
-    action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
-    action_std = all_action_data.std(dim=[0, 1], keepdim=True)
-    action_std = torch.clip(action_std, 1e-2, np.inf)  # clipping
-
-    # normalize qpos data
+    # normalize qpos data (still needed for model input)
     qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
     qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
     qpos_std = torch.clip(qpos_std, 1e-2, np.inf)  # clipping
 
     stats = {
-        "action_mean": action_mean.numpy().squeeze(),
-        "action_std": action_std.numpy().squeeze(),
         "qpos_mean": qpos_mean.numpy().squeeze(),
         "qpos_std": qpos_std.numpy().squeeze(),
         "example_qpos": qpos,
@@ -136,7 +146,7 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats, max_action_len
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val):
+def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, tokenizer=None):
     print(f"\nData from: {dataset_dir}\n")
     # obtain train test split
     train_ratio = 0.8
@@ -144,12 +154,12 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
 
-    # obtain normalization stats for qpos and action
+    # obtain normalization stats for qpos
     norm_stats, max_action_len = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, max_action_len)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, max_action_len)
+    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, max_action_len, tokenizer=tokenizer)
+    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, max_action_len, tokenizer=tokenizer)
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size_train,

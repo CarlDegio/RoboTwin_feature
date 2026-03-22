@@ -143,4 +143,5 @@ dmypy.json
 .pyre/
 
 act-ckpt/
+act_ckpt_token_action/
 processed_data/

@@ -6,25 +6,27 @@ ckpt_setting: null
 seed: 0
 instruction_type: unseen
 
-# ACT-specific arguments
+# ACT-DT specific arguments
 action_dim: 14
+state_dim: 14
 kl_weight: 10.0
-chunk_size: 50 
+chunk_size: 50
 hidden_dim: 512
 dim_feedforward: 3200
-temporal_agg: false 
+n_bins: 256
+aux_weight: 0.5
 device: cuda:0
 
 # DETR parser args
 ckpt_dir: null
 policy_class: ACT
-num_epochs: 2000
+num_epochs: 6000
 
 # Model training params
 position_embedding: sine
 lr_backbone: 0.00001
 weight_decay: 0.0001
-lr: 0.00001
+lr: 0.00005
 masks: false
 dilation: false
 backbone: resnet18

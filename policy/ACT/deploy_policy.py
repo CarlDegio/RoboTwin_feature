@@ -44,14 +44,4 @@ def eval(TASK_ENV, model, observation):
 
 
 def reset_model(model):
-    # Reset temporal aggregation state if enabled
-    if model.temporal_agg:
-        model.all_time_actions = torch.zeros([
-            model.max_timesteps,
-            model.max_timesteps + model.num_queries,
-            model.state_dim,
-        ]).to(model.device)
-        model.t = 0
-        print("Reset temporal aggregation state")
-    else:
-        model.t = 0
+    model.t = 0

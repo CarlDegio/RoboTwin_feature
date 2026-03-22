@@ -23,6 +23,7 @@ from utils import load_data  # data functions
 from utils import sample_box_pose, sample_insertion_pose  # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict  # helper functions
 from act_policy import ACTPolicy, CNNMLPPolicy
+from action_tokenizer import ActionTokenizer
 from visualize_episodes import save_videos
 
 # from sim_env import BOX_POSE
@@ -60,9 +61,16 @@ def main(args):
     camera_names = task_config["camera_names"]
 
     # fixed parameters
-    state_dim = 14  # yiheng
+    state_dim = args["state_dim"]
     lr_backbone = 1e-5
     backbone = "resnet18"
+    n_bins = args.get("n_bins", 256)
+    aux_weight = args.get("aux_weight", 0.5)
+    tokenizer_stats_path = args.get("tokenizer_stats_path", os.path.join(ckpt_dir, "tokenizer_stats.json"))
+
+    # Load tokenizer for dataset
+    tokenizer = ActionTokenizer(n_bins=n_bins, stats_path=tokenizer_stats_path)
+
     if policy_class == "ACT":
         enc_layers = 4
         dec_layers = 4
@@ -79,6 +87,10 @@ def main(args):
             "dec_layers": dec_layers,
             "nheads": nheads,
             "camera_names": camera_names,
+            "state_dim": state_dim,
+            "n_bins": n_bins,
+            "aux_weight": aux_weight,
+            "tokenizer_stats_path": tokenizer_stats_path,
         }
     elif policy_class == "CNNMLP":
         policy_config = {
@@ -102,7 +114,6 @@ def main(args):
         "policy_config": policy_config,
         "task_name": task_name,
         "seed": args["seed"],
-        "temporal_agg": args["temporal_agg"],
         "camera_names": camera_names,
         "real_robot": not is_sim,
         "save_freq": args['save_freq']
@@ -121,7 +132,7 @@ def main(args):
         exit()
 
     train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train,
-                                                           batch_size_val)
+                                                           batch_size_val, tokenizer=tokenizer)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -179,7 +190,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     camera_names = config["camera_names"]
     max_timesteps = config["episode_len"]
     task_name = config["task_name"]
-    temporal_agg = config["temporal_agg"]
+    temporal_agg = config.get("temporal_agg", False)
     onscreen_cam = "angle"
 
     # load policy and stats
@@ -195,7 +206,13 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     pre_process = lambda s_qpos: (s_qpos - stats["qpos_mean"]) / stats["qpos_std"]
-    post_process = lambda a: a * stats["action_std"] + stats["action_mean"]
+
+    # Load tokenizer for decoding discrete tokens back to delta actions
+    tokenizer_stats_path = policy_config.get("tokenizer_stats_path",
+                                              os.path.join(ckpt_dir, "tokenizer_stats.json"))
+    n_bins = policy_config.get("n_bins", 256)
+    from action_tokenizer import ActionTokenizer
+    tokenizer = ActionTokenizer(n_bins=n_bins, stats_path=tokenizer_stats_path)
 
     # load environment
     if real_robot:
@@ -211,9 +228,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         env_max_reward = env.task.max_reward
 
     query_frequency = policy_config["num_queries"]
-    if temporal_agg:
-        query_frequency = 1
-        num_queries = policy_config["num_queries"]
+    num_queries = policy_config["num_queries"]
 
     max_timesteps = int(max_timesteps * 1)  # may increase for real-world tasks
 
@@ -237,9 +252,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
             plt.ion()
 
         ### evaluation loop
-        if temporal_agg:
-            all_time_actions = torch.zeros([max_timesteps, max_timesteps + num_queries, state_dim]).cuda()
-
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = []  # for visualization
         qpos_list = []
@@ -265,31 +277,26 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos_history[:, t] = qpos
                 curr_image = get_image(ts, camera_names)
 
-                ### query policy
+                ### query policy — ACT-DT: decode full chunk, execute one step at a time
                 if config["policy_class"] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
-                    if temporal_agg:
-                        all_time_actions[[t], t:t + num_queries] = all_actions
-                        actions_for_curr_step = all_time_actions[:, t]
-                        actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-                        actions_for_curr_step = actions_for_curr_step[actions_populated]
-                        k = 0.01
-                        exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = (torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1))
-                        raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
-                    else:
-                        raw_action = all_actions[:, t % query_frequency]
+                        action_logits = policy(qpos, curr_image)
+                        # action_logits: (1, num_queries, state_dim, n_bins)
+                        token_indices = action_logits.argmax(dim=-1).squeeze(0)  # (num_queries, state_dim)
+                        delta_actions = tokenizer.decode(token_indices.cpu().numpy())  # (num_queries, state_dim)
+                        # Accumulate deltas to absolute actions
+                        all_actions_np = np.zeros_like(delta_actions)
+                        all_actions_np[0] = qpos_numpy + delta_actions[0]
+                        for i in range(1, len(delta_actions)):
+                            all_actions_np[i] = all_actions_np[i - 1] + delta_actions[i]
+                    raw_action = all_actions_np[t % query_frequency]
+                    target_qpos = raw_action
                 elif config["policy_class"] == "CNNMLP":
                     raw_action = policy(qpos, curr_image)
+                    raw_action = raw_action.squeeze(0).cpu().numpy()
+                    target_qpos = raw_action
                 else:
                     raise NotImplementedError
-
-                ### post-process actions
-                raw_action = raw_action.squeeze(0).cpu().numpy()
-                action = post_process(raw_action)
-                target_qpos = action
 
                 ### step the environment
                 ts = env.step(target_qpos)
@@ -344,14 +351,16 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = (
+    image_data, qpos_data, action_data, is_pad, action_tokens, delta_normalized = data
+    image_data, qpos_data, action_data, is_pad, action_tokens, delta_normalized = (
         image_data.cuda(),
         qpos_data.cuda(),
         action_data.cuda(),
         is_pad.cuda(),
+        action_tokens.cuda(),
+        delta_normalized.cuda(),
     )
-    return policy(qpos_data, image_data, action_data, is_pad)  # TODO remove None
+    return policy(qpos_data, image_data, action_data, is_pad, action_tokens, delta_normalized)
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -487,5 +496,8 @@ if __name__ == "__main__":
         required=False,
     )
     parser.add_argument("--temporal_agg", action="store_true")
+    parser.add_argument("--n_bins", action="store", type=int, help="number of discrete bins", default=256)
+    parser.add_argument("--aux_weight", action="store", type=float, help="soft-argmax aux loss weight", default=0.5)
+    parser.add_argument("--tokenizer_stats_path", action="store", type=str, help="path to tokenizer stats JSON", required=True)
 
     main(vars(parser.parse_args()))

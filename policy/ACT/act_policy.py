@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 import pickle
+import json
 from torch.nn import functional as F
 import torchvision.transforms as transforms
 
@@ -11,11 +12,13 @@ try:
         build_ACT_model_and_optimizer,
         build_CNNMLP_model_and_optimizer,
     )
+    from action_tokenizer import ActionTokenizer
 except:
     from .detr.main import (
         build_ACT_model_and_optimizer,
         build_CNNMLP_model_and_optimizer,
     )
+    from .action_tokenizer import ActionTokenizer
 import IPython
 
 e = IPython.embed
@@ -29,28 +32,79 @@ class ACTPolicy(nn.Module):
         self.model = model  # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override["kl_weight"]
-        print(f"KL Weight {self.kl_weight}")
+        self.aux_weight = args_override.get("aux_weight", 0.5)
+        self.n_bins = args_override.get("n_bins", 256)
 
-    def __call__(self, qpos, image, actions=None, is_pad=None):
+        # Load tokenizer for soft-argmax auxiliary loss
+        tokenizer_stats_path = args_override.get("tokenizer_stats_path", None)
+        if tokenizer_stats_path is not None:
+            self.tokenizer = ActionTokenizer(n_bins=self.n_bins, stats_path=tokenizer_stats_path)
+            # Register bin centers as buffer for soft-argmax
+            self.register_buffer("bin_centers", self.tokenizer.bin_centers_torch.clone())
+        else:
+            self.tokenizer = None
+            self.register_buffer("bin_centers", torch.linspace(-1.0, 1.0, self.n_bins + 1)[:-1].add(1.0 / self.n_bins))
+
+        print(f"KL Weight {self.kl_weight}, Aux Weight {self.aux_weight}, N_bins {self.n_bins}")
+
+    def __call__(self, qpos, image, actions=None, is_pad=None, action_tokens=None, delta_actions=None):
+        """
+        Training:
+            qpos: (batch, state_dim)
+            image: (batch, num_cam, C, H, W)
+            actions: (batch, seq, state_dim) — continuous delta actions (for CVAE encoder)
+            is_pad: (batch, seq) — bool
+            action_tokens: (batch, seq, state_dim) — LongTensor discrete targets
+            delta_actions: (batch, seq, state_dim) — continuous delta actions (for aux loss, normalized)
+        Inference:
+            Only qpos and image provided. Returns decoded delta action logits.
+        """
         env_state = None
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         image = normalize(image)
+
         if actions is not None:  # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
+            action_tokens = action_tokens[:, :self.model.num_queries]
+            delta_actions = delta_actions[:, :self.model.num_queries]
 
-            a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
+            # Forward: CVAE encoder sees continuous delta actions, decoder outputs logits
+            action_logits, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad)
+            # action_logits: (batch, num_queries, state_dim, n_bins)
+
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
+
             loss_dict = dict()
-            all_l1 = F.l1_loss(actions, a_hat, reduction="none")
-            l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
-            loss_dict["l1"] = l1
+
+            # Cross-entropy loss on discrete tokens
+            bs, seq, sdim, nbins = action_logits.shape
+            # Reshape for CE: (batch*seq*state_dim, n_bins) vs (batch*seq*state_dim,)
+            logits_flat = action_logits.reshape(-1, nbins)
+            tokens_flat = action_tokens.reshape(-1)
+            ce_all = F.cross_entropy(logits_flat, tokens_flat, reduction="none")
+            # ce_all: (batch*seq*state_dim,) -> (batch, seq, state_dim)
+            ce_all = ce_all.reshape(bs, seq, sdim)
+            # Mask padded positions
+            pad_mask = ~is_pad.unsqueeze(-1).expand_as(ce_all)  # (batch, seq, state_dim)
+            ce_loss = (ce_all * pad_mask).sum() / pad_mask.sum().clamp(min=1)
+
+            # Soft-argmax auxiliary L1 loss
+            probs = F.softmax(action_logits, dim=-1)  # (batch, seq, state_dim, n_bins)
+            bin_centers = self.bin_centers.to(action_logits.device)  # (n_bins,)
+            soft_pred = (probs * bin_centers).sum(dim=-1)  # (batch, seq, state_dim)
+            aux_l1 = F.l1_loss(soft_pred, delta_actions, reduction="none")
+            aux_loss = (aux_l1 * pad_mask).sum() / pad_mask.sum().clamp(min=1)
+
+            loss_dict["ce"] = ce_loss
             loss_dict["kl"] = total_kld[0]
-            loss_dict["loss"] = loss_dict["l1"] + loss_dict["kl"] * self.kl_weight
+            loss_dict["aux"] = aux_loss
+            loss_dict["loss"] = ce_loss + self.kl_weight * loss_dict["kl"] + self.aux_weight * aux_loss
             return loss_dict
         else:  # inference time
-            a_hat, _, (_, _) = self.model(qpos, image, env_state)  # no action, sample from prior
-            return a_hat
+            action_logits, (_, _) = self.model(qpos, image, env_state)
+            # action_logits: (batch, num_queries, state_dim, n_bins)
+            return action_logits
 
     def configure_optimizers(self):
         return self.optimizer
@@ -101,86 +155,69 @@ def kl_divergence(mu, logvar):
 
 
 class ACT:
+    """Inference wrapper for ACT-DT policy with discrete action tokens."""
 
-    def __init__(self, args_override=None, RoboTwin_Config=None):
-        if args_override is None:
-            args_override = {
-                "kl_weight": 0.1,  # Default value, can be overridden
-                "device": "cuda:0",
-            }
-        self.policy = ACTPolicy(args_override, RoboTwin_Config)
-        self.device = torch.device(args_override["device"])
+    def __init__(self, usr_args, RoboTwin_Config):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load normalization stats for qpos
+        ckpt_dir = usr_args["ckpt_dir"]
+        stats_path = os.path.join(ckpt_dir, "dataset_stats.pkl")
+        with open(stats_path, "rb") as f:
+            stats = pickle.load(f)
+        self.pre_process = lambda qpos: (qpos - stats["qpos_mean"]) / stats["qpos_std"]
+
+        # Load tokenizer
+        tokenizer_stats_path = usr_args.get("tokenizer_stats_path", os.path.join(ckpt_dir, "tokenizer_stats.json"))
+        n_bins = usr_args.get("n_bins", 256)
+        self.tokenizer = ActionTokenizer(n_bins=n_bins, stats_path=tokenizer_stats_path)
+
+        # Build policy
+        policy_config = {
+            "lr": usr_args.get("lr", 5e-5),
+            "num_queries": usr_args.get("chunk_size", 50),
+            "kl_weight": usr_args.get("kl_weight", 10),
+            "hidden_dim": usr_args.get("hidden_dim", 512),
+            "dim_feedforward": usr_args.get("dim_feedforward", 3200),
+            "lr_backbone": usr_args.get("lr_backbone", 1e-5),
+            "backbone": usr_args.get("backbone", "resnet18"),
+            "enc_layers": usr_args.get("enc_layers", 4),
+            "dec_layers": usr_args.get("dec_layers", 4),
+            "nheads": usr_args.get("nheads", 8),
+            "camera_names": usr_args.get("camera_names", ["head_cam", "left_cam", "right_cam"]),
+            "state_dim": usr_args.get("state_dim", 14),
+            "n_bins": n_bins,
+            "aux_weight": usr_args.get("aux_weight", 0.5),
+            "tokenizer_stats_path": tokenizer_stats_path,
+        }
+        self.policy = ACTPolicy(policy_config, RoboTwin_Config)
+
+        # Load checkpoint
+        ckpt_name = usr_args.get("ckpt_name", "policy_best.ckpt")
+        ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+        loading_status = self.policy.load_state_dict(torch.load(ckpt_path, map_location=self.device))
+        print(f"Loaded checkpoint from {ckpt_path}: {loading_status}")
         self.policy.to(self.device)
         self.policy.eval()
 
-        # Temporal aggregation settings
-        self.temporal_agg = args_override.get("temporal_agg", False)
-        self.num_queries = args_override["chunk_size"]
-        self.state_dim = RoboTwin_Config.action_dim  # Standard joint dimension for bimanual robot
-        self.max_timesteps = 3000  # Large enough for deployment
+        self.state_dim = usr_args.get("state_dim", 14)
+        self.num_queries = usr_args.get("chunk_size", 50)
+        self.t = 0
 
-        # Set query frequency based on temporal_agg - matching imitate_episodes.py logic
-        self.query_frequency = self.num_queries
-        if self.temporal_agg:
-            self.query_frequency = 1
-            # Initialize with zeros matching imitate_episodes.py format
-            self.all_time_actions = torch.zeros([
-                self.max_timesteps,
-                self.max_timesteps + self.num_queries,
-                self.state_dim,
-            ]).to(self.device)
-            print(f"Temporal aggregation enabled with {self.num_queries} queries")
+    def get_action(self, obs):
+        """
+        Get actions from observation. Decodes full chunk of discrete tokens
+        into absolute actions via delta accumulation.
 
-        self.t = 0  # Current timestep
+        Returns: list of np.array actions (each shape (state_dim,))
+        """
+        # Normalize qpos
+        qpos = np.array(obs["qpos"], dtype=np.float32)
+        raw_qpos = qpos.copy()  # keep unnormalized for delta accumulation
+        qpos_normalized = self.pre_process(qpos)
+        qpos_tensor = torch.from_numpy(qpos_normalized).float().to(self.device).unsqueeze(0)
 
-        # Load statistics for normalization
-        ckpt_dir = args_override.get("ckpt_dir", "")
-        if ckpt_dir:
-            # Load dataset stats for normalization
-            stats_path = os.path.join(ckpt_dir, "dataset_stats.pkl")
-            if os.path.exists(stats_path):
-                with open(stats_path, "rb") as f:
-                    self.stats = pickle.load(f)
-                print(f"Loaded normalization stats from {stats_path}")
-            else:
-                print(f"Warning: Could not find stats file at {stats_path}")
-                self.stats = None
-
-            # Load policy weights
-            ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
-            print("current pwd:", os.getcwd())
-            if os.path.exists(ckpt_path):
-                loading_status = self.policy.load_state_dict(torch.load(ckpt_path))
-                print(f"Loaded policy weights from {ckpt_path}")
-                print(f"Loading status: {loading_status}")
-            else:
-                print(f"Warning: Could not find policy checkpoint at {ckpt_path}")
-        else:
-            self.stats = None
-
-    def pre_process(self, qpos):
-        """Normalize input joint positions"""
-        if self.stats is not None:
-            return (qpos - self.stats["qpos_mean"]) / self.stats["qpos_std"]
-        return qpos
-
-    def post_process(self, action):
-        """Denormalize model outputs"""
-        if self.stats is not None:
-            return action * self.stats["action_std"] + self.stats["action_mean"]
-        return action
-
-    def get_action(self, obs=None):
-        if obs is None:
-            return None
-
-        # Convert observations to tensors and normalize qpos - matching imitate_episodes.py
-        qpos_numpy = np.array(obs["qpos"])
-        qpos_normalized = self.pre_process(qpos_numpy)
-        qpos = torch.from_numpy(qpos_normalized).float().to(self.device).unsqueeze(0)
-
-        # Prepare images following imitate_episodes.py pattern
-        # Stack images from all cameras
+        # Prepare images
         curr_images = []
         camera_names = ["head_cam", "left_cam", "right_cam"]
         for cam_name in camera_names:
@@ -189,31 +226,23 @@ class ACT:
         curr_image = torch.from_numpy(curr_image).float().to(self.device).unsqueeze(0)
 
         with torch.no_grad():
-            # Only query the policy at specified intervals - exactly like imitate_episodes.py
-            if self.t % self.query_frequency == 0:
-                self.all_actions = self.policy(qpos, curr_image)
+            action_logits = self.policy(qpos_tensor, curr_image)
+            # action_logits: (1, num_queries, state_dim, n_bins)
+            # Argmax decoding
+            token_indices = action_logits.argmax(dim=-1)  # (1, num_queries, state_dim)
+            token_indices = token_indices.squeeze(0)  # (num_queries, state_dim)
 
-            if self.temporal_agg:
-                # Match temporal aggregation exactly from imitate_episodes.py
-                self.all_time_actions[[self.t], self.t:self.t + self.num_queries] = (self.all_actions)
-                actions_for_curr_step = self.all_time_actions[:, self.t]
-                actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-                actions_for_curr_step = actions_for_curr_step[actions_populated]
+        # Decode tokens to continuous delta actions
+        delta_actions = self.tokenizer.decode(token_indices.cpu().numpy())  # (num_queries, state_dim)
 
-                # Use same weighting factor as in imitate_episodes.py
-                k = 0.01
-                exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                exp_weights = exp_weights / exp_weights.sum()
-                exp_weights = (torch.from_numpy(exp_weights).to(self.device).unsqueeze(dim=1))
+        # Accumulate deltas to get absolute actions
+        # delta[0] = action[0] - qpos, so action[0] = qpos + delta[0]
+        # delta[t] = action[t] - action[t-1], so action[t] = action[t-1] + delta[t]
+        absolute_actions = np.zeros_like(delta_actions)
+        absolute_actions[0] = raw_qpos + delta_actions[0]
+        for t in range(1, len(delta_actions)):
+            absolute_actions[t] = absolute_actions[t - 1] + delta_actions[t]
 
-                raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
-            else:
-                # Direct action selection, same as imitate_episodes.py
-                raw_action = self.all_actions[:, self.t % self.query_frequency]
-
-        # Denormalize action
-        raw_action = raw_action.cpu().numpy()
-        action = self.post_process(raw_action)
-
-        self.t += 1
-        return action
+        # Return as list of actions
+        actions = [absolute_actions[t] for t in range(len(absolute_actions))]
+        return actions[:30]

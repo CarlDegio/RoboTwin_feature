@@ -115,6 +115,9 @@ def get_args_parser():
     parser.add_argument("--temporal_agg", action="store_true")
     parser.add_argument("--state_dim", action="store", type=int, help="state dim", required=True)
     parser.add_argument("--save_freq", action="store", type=int, help="save ckpt frequency", required=False, default=6000)
+    parser.add_argument("--n_bins", action="store", type=int, help="number of discrete bins per action dim", default=256)
+    parser.add_argument("--aux_weight", action="store", type=float, help="soft-argmax auxiliary loss weight", default=0.5)
+    parser.add_argument("--tokenizer_stats_path", action="store", type=str, help="path to tokenizer Q99 stats JSON", default=None)
     # parser.add_argument('--num_queries',type=int, required=True)
     # parser.add_argument('--actionsByQuery',type=int, required=True)
 
