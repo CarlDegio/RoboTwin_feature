@@ -163,3 +163,8 @@ finetune_*.sh
 log.txt
 
 tensorflow_datasets
+
+processed_data/
+
+ckpts/
+ckpts_oft/

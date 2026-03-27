@@ -934,10 +934,19 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
                 .cpu()
                 .numpy()
             )
+
+            # Debug: print token prediction info
+            # print(f"[DEBUG-TOKEN] Predicted token IDs (first 14): {predicted_action_token_ids[0,:14]}")
+            # print(f"[DEBUG-TOKEN] Unique tokens: {len(np.unique(predicted_action_token_ids))}")
+            # print(f"[DEBUG-TOKEN] Token range: [{predicted_action_token_ids.min()}, {predicted_action_token_ids.max()}]")
+
             discretized_actions = self.vocab_size - predicted_action_token_ids
             discretized_actions = np.clip(discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1)
             normalized_actions = self.bin_centers[discretized_actions]
             normalized_actions = normalized_actions.reshape(NUM_ACTIONS_CHUNK, ACTION_DIM)
+
+            # print(f"[DEBUG-TOKEN] Normalized actions (first): {normalized_actions[0]}")
+            # print(f"[DEBUG-TOKEN] Normalized range: [{normalized_actions.min():.4f}, {normalized_actions.max():.4f}]")
 
         return normalized_actions, actions_hidden_states
 
