@@ -32,7 +32,7 @@ torchrun --standalone --nnodes 1 --nproc-per-node 3 \
   --wandb_project "openvla-oft" \
   --run_id_override "Optional" \
   --run_id_note some_run_id_note \
-  ### example usage for resuming a training process
-  # --resume True\
-  # --resume_step 5000 \
-  # --resume_base_model_path openvla/openvla-7b
+  # --resume True \
+  # --resume_step 60000 \
+  # --resume_base_model_path openvla/openvla-7b \
+  # --resume_checkpoint_path ckpts_离散token+prop效果尚可/Optional--60000_chkpt

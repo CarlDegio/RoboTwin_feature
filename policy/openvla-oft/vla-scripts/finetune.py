@@ -108,6 +108,7 @@ class FinetuneConfig:
     resume: bool = False                             # If True, resumes from checkpoint
     resume_step: Optional[int] = None                # (When `resume==True`) Step number that we are resuming from
     resume_base_model_path: Optional[str] = None      # Set when merge_lora_during_training is False. Will load base vla in this path
+    resume_checkpoint_path: Optional[str] = None      # Directory containing saved checkpoint artifacts for resuming
     image_aug: bool = True                           # If True, trains with image augmentations (HIGHLY RECOMMENDED)
     diffusion_sample_freq: int = 50                  # (When `use_diffusion==True`) Frequency for sampling in steps
 
@@ -301,7 +302,7 @@ def init_module(
     count_parameters(module, module_name)
 
     if cfg.resume:
-        state_dict = load_checkpoint(module_name, cfg.vla_path, cfg.resume_step)
+        state_dict = load_checkpoint(module_name, cfg.resume_checkpoint_path, cfg.resume_step)
         module.load_state_dict(state_dict)
 
     if to_bf16:
@@ -980,6 +981,11 @@ def finetune(cfg: FinetuneConfig) -> None:
     assert not (
         cfg.use_l1_regression and cfg.use_diffusion
     ), "Cannot do both L1 regression and diffusion. Please pick one of them!"
+    if cfg.resume:
+        assert cfg.resume_step is not None, "Please set --resume_step when --resume=True!"
+        assert cfg.resume_checkpoint_path is not None, (
+            "Please set --resume_checkpoint_path to the saved checkpoint directory when --resume=True!"
+        )
 
     # Trim trailing forward slash ('/') in VLA path if it exists
     cfg.vla_path = cfg.vla_path.rstrip("/")
@@ -1080,7 +1086,7 @@ def finetune(cfg: FinetuneConfig) -> None:
         ## Right only when merge_lora_during_training is False ???
         # If resuming, load previously saved LoRA adapter weights
         if cfg.resume:
-            adapter_dir = os.path.join(cfg.vla_path, "lora_adapter")
+            adapter_dir = os.path.join(cfg.resume_checkpoint_path, "lora_adapter")
             if os.path.exists(adapter_dir):
                 print(f"[INFO] Resuming LoRA adapter from: {adapter_dir}")
                 vla.load_adapter(adapter_dir, adapter_name="default", is_trainable=True)
@@ -1104,7 +1110,7 @@ def finetune(cfg: FinetuneConfig) -> None:
         count_parameters(vla.vision_backbone, "vla.vision_backbone (post-wrap)")
         if cfg.resume:
             state_dict = load_checkpoint(
-                "vision_backbone", cfg.vla_path, cfg.resume_step
+                "vision_backbone", cfg.resume_checkpoint_path, cfg.resume_step
             )
             vla.model.vision_backbone.load_state_dict(state_dict)
         vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
@@ -1209,7 +1215,7 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     # === Resume logic ===
     if cfg.resume:
-        train_state_path = Path(cfg.vla_path) / "training_state.pt"
+        train_state_path = Path(cfg.resume_checkpoint_path) / "training_state.pt"
         if not train_state_path.exists():
             print(f"[Warning] no training_state.pt")
         else:
@@ -1314,7 +1320,8 @@ def finetune(cfg: FinetuneConfig) -> None:
     }
 
     # Start training
-    with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
+    progress_initial = cfg.resume_step if cfg.resume else 0
+    with tqdm.tqdm(total=cfg.max_steps, initial=progress_initial, leave=False) as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
