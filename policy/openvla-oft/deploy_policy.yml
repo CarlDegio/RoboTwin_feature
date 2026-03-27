@@ -4,19 +4,19 @@ task_name: null
 task_config: null
 ckpt_setting: null
 seed: null
-instruction_type: unseen
+instruction_type: seen
 policy_conda_env: null
 
 # Policy-related arguments
 checkpoint_path: null
-use_l1_regression: true
+use_l1_regression: false
 use_diffusion: false
 use_film: true
 use_proprio: true
 load_in_8bit: false
 load_in_4bit: false
 center_crop: true
-num_images_in_input: 3
-unnorm_key: null
+num_images_in_input: 1
+unnorm_key: robotwin4stack_aloha
 num_open_loop_steps: 25
 lora_rank: 32

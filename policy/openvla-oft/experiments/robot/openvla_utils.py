@@ -780,7 +780,20 @@ def get_vla_action(
         # Generate action
         if action_head is None:
             # Standard VLA output (single-image inputs, discrete actions)
-            action, _ = vla.predict_action(**inputs, unnorm_key=cfg.unnorm_key, do_sample=False)
+            action, _ = vla.predict_action(
+                **inputs, 
+                unnorm_key=cfg.unnorm_key,
+                do_sample=False,
+                proprio=proprio,
+                proprio_projector=proprio_projector,
+                noisy_action_projector=noisy_action_projector,
+                action_head=action_head,
+                use_film=use_film,)
+            # Debug: print action statistics
+            # print(f"[DEBUG] Predicted action shape: {action.shape}")
+            # print(f"[DEBUG] Action range: [{action.min():.4f}, {action.max():.4f}], mean: {action.mean():.4f}")
+            # print(f"[DEBUG] First action: {action[0]}")
+            # print(f"[DEBUG] unnorm_key: {cfg.unnorm_key}")
         else:
             # Custom action head for continuous actions
             action, _ = vla.predict_action(

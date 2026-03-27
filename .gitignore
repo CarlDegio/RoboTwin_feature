@@ -29,5 +29,3 @@ envs/curobo/*
 /*.json*
 /*.txt
 policy/pi0/training_data
-policy/openvla-oft/processed_data
-policy/openvla-oft/ckpts
