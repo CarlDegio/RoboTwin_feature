@@ -81,7 +81,7 @@ def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
             yield path, {"steps": steps, "episode_metadata": {"file_path": path}}
 
 
-class robotwin4stack(MultiThreadedDatasetBuilder):
+class robotwin4stack_aloha(MultiThreadedDatasetBuilder):
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release for RoboTwin place_object dataset.",
@@ -176,5 +176,5 @@ class robotwin4stack(MultiThreadedDatasetBuilder):
 
 
 if __name__ == "__main__":
-    builder = robotwin4stack()
+    builder = robotwin4stack_aloha()
     builder.download_and_prepare()

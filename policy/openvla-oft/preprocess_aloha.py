@@ -104,4 +104,5 @@ if __name__ == "__main__":
 
 """
 python preprocess_aloha.py   --dataset_path /mnt/data/VLA_flowmatching/RoboTwin/data/place_object_scale/demo_randomized/data   --out_base_dir /mnt/data/VLA_flowmatching/RoboTwin/data/place_object_scale/processed_openvla/   --percent_val 0.05 --instruction_dir /mnt/data/VLA_flowmatching/RoboTwin/data/place_object_scale/demo_randomized/instructions
+python preprocess_aloha.py --dataset_path ../../data/stack_blocks_three/demo_clean/data --out_base_dir ./processed_data/stack_blocks_three --percent_val 0.05 --instruction_dir ../../data/stack_blocks_three/demo_clean/instructions
 """
