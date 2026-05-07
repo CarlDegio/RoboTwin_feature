@@ -17,8 +17,8 @@ load_in_8bit: false
 load_in_4bit: false
 center_crop: true
 num_images_in_input: 1
-unnorm_key: robotwin4stack_aloha
+unnorm_key: robotwin4stack_rand_aloha
 num_open_loop_steps: 25
 lora_rank: 32
-action_mode: absolute  # absolute or delta
+action_mode: delta  # absolute or delta
 delta_gripper: false

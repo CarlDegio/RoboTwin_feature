@@ -940,4 +940,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "aloha_place_object_scale":aloha_dataset_transform,
     "aloha_stack_bowls_three_clean_builder":aloha_dataset_transform,
     "robotwin4stack_aloha":aloha_dataset_transform,
+    "robotwin4stack_rand_aloha":aloha_dataset_transform,
 }
