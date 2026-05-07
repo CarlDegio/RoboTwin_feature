@@ -10,7 +10,7 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   vla-scripts/finetune.py \
   --vla_path openvla/openvla-7b \
   --data_root_dir /mnt/tensorflow_datasets/ \
-  --dataset_name robotwin4stack_aloha \
+  --dataset_name robotwin4stack_rand_aloha \
   --run_root_dir ckpts \
   --use_l1_regression False \
   --use_diffusion False \
