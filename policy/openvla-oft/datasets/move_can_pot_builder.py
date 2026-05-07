@@ -6,10 +6,26 @@ import numpy as np
 import tensorflow_datasets as tfds
 import random
 from datasets.conversion_utils import MultiThreadedDatasetBuilder
+tfds.core.constants.DATA_DIR = "/mnt/tensorflow_datasets"
+
+ACTION_MODE = os.environ.get("OPENVLA_ACTION_MODE", "delta").lower()
+DELTA_GRIPPER = os.environ.get("OPENVLA_DELTA_GRIPPER", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+GRIPPER_INDICES = (6, 13)
+if ACTION_MODE not in ("absolute", "delta"):
+    raise ValueError(
+        f"Unsupported OPENVLA_ACTION_MODE={ACTION_MODE!r}; expected 'absolute' or 'delta'."
+    )
 
 
 def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
-    print(f"[INFO] Generating examples from {len(paths)} paths")
+    print(
+        f"[INFO] Generating examples from {len(paths)} paths "
+        f"(action_mode={ACTION_MODE}, delta_gripper={DELTA_GRIPPER})"
+    )
     for path in paths:
         print(f"[INFO] Parsing file: {path}")
         with h5py.File(path, "r") as f:
@@ -29,12 +45,18 @@ def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
                 print(f"[WARNING] Missing expected keys in {path}, skipping")
                 continue
             T = f["/action"].shape[0]
-            actions = f["/action"][1:].astype(np.float32)  # (T-1, 14)
+            absolute_actions = f["/action"][:].astype(np.float32)
+            if ACTION_MODE == "absolute":
+                actions = absolute_actions[1:].copy()  # (T-1, 14)
+            else:
+                actions = f["/relative_action"][: T - 1].astype(np.float32)
+                if not DELTA_GRIPPER:
+                    actions[:, GRIPPER_INDICES] = absolute_actions[1:, GRIPPER_INDICES]
             head = f["/head_camera_image"][ : T-1 ].astype(np.uint8)
             left = f["/left_wrist_image"][ : T-1].astype(np.uint8)
             right = f["/right_wrist_image"][ :T-1].astype(np.uint8)
             low = f["/low_cam_image"][ : T-1].astype(np.uint8)
-            states = f["/action"][: T - 1].astype(np.float32)  # (T-1, 14)
+            states = absolute_actions[: T - 1]  # (T-1, 14)
             seen = [
                 s.decode("utf-8") if isinstance(s, bytes) else s for s in f["/seen"][()]
             ]
@@ -81,13 +103,14 @@ def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
             yield path, {"steps": steps, "episode_metadata": {"file_path": path}}
 
 
-class robotwin4stack_aloha(MultiThreadedDatasetBuilder):
-    VERSION = tfds.core.Version("1.0.0")
+class robotwin4stack_rand_aloha(MultiThreadedDatasetBuilder):
+    VERSION = tfds.core.Version("1.1.0" if ACTION_MODE == "delta" else "1.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release for RoboTwin place_object dataset.",
+        "1.1.0": "Delta joint action labels with absolute proprio state.",
     }
 
-    N_WORKERS = 1
+    N_WORKERS = 32
     MAX_PATHS_IN_MEMORY = 100
     PARSE_FCN = _generate_examples
 
@@ -176,5 +199,5 @@ class robotwin4stack_aloha(MultiThreadedDatasetBuilder):
 
 
 if __name__ == "__main__":
-    builder = robotwin4stack_aloha()
+    builder = robotwin4stack_rand_aloha()
     builder.download_and_prepare()

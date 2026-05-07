@@ -9,7 +9,7 @@
 torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   vla-scripts/finetune.py \
   --vla_path openvla/openvla-7b \
-  --data_root_dir /home/lzh/tensorflow_datasets/ \
+  --data_root_dir /mnt/tensorflow_datasets/ \
   --dataset_name robotwin4stack_aloha \
   --run_root_dir ckpts \
   --use_l1_regression False \
@@ -18,19 +18,19 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   --num_images_in_input 1 \
   --grad_accumulation_steps 1 \
   --use_proprio True \
-  --batch_size 1 \
+  --batch_size 8 \
   --learning_rate 5e-4 \
   --num_steps_before_decay 50000 \
-  --max_steps 100005 \
+  --max_steps 50005 \
   --use_val_set True \
   --val_freq 1000 \
-  --save_freq 30000 \
+  --save_freq 25000 \
   --save_latest_checkpoint_only False \
   --image_aug True \
   --lora_rank 32 \
   --wandb_entity "carldegio" \
   --wandb_project "openvla-oft" \
-  --run_id_override "discrete_1frame_prop" \
+  --run_id_override "discrete_1frame_prop_rand_delta_actions" \
   --run_id_note some_run_id_note \
   # --resume True \
   # --resume_step 60000 \

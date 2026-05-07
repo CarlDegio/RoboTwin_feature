@@ -26,6 +26,8 @@ class InferenceConfig:
     unnorm_key: str = ""
     num_open_loop_steps: int = NUM_ACTIONS_CHUNK
     lora_rank: int = 32
+    action_mode: str = "absolute"
+    delta_gripper: bool = False
 
 
 def encode_obs(obs: dict) -> dict:
@@ -40,6 +42,10 @@ def encode_obs(obs: dict) -> dict:
 
 class Model:
     def __init__(self, cfg: InferenceConfig):
+        if cfg.action_mode not in ("absolute", "delta"):
+            raise ValueError(
+                f"Unsupported action_mode={cfg.action_mode!r}; expected 'absolute' or 'delta'."
+            )
         self.cfg = cfg
         self.vla = get_vla(cfg)
         self.processor = get_processor(cfg)
@@ -81,6 +87,8 @@ def get_model(usr_args: dict):
         "unnorm_key": usr_args["unnorm_key"],
         "num_open_loop_steps": usr_args.get("num_open_loop_steps", NUM_ACTIONS_CHUNK),
         "lora_rank": usr_args.get("lora_rank", 32),
+        "action_mode": usr_args.get("action_mode", "absolute"),
+        "delta_gripper": usr_args.get("delta_gripper", False),
     }
 
     cfg = InferenceConfig(**config_args)
@@ -91,11 +99,30 @@ def reset_model(model=None):
     pass
 
 
+def convert_action_for_env(action: np.ndarray, observation: dict, cfg: InferenceConfig):
+    if cfg.action_mode == "absolute":
+        return action
+
+    current_action = np.asarray(observation["joint_action"]["vector"], dtype=np.float32)
+    env_action = current_action.copy()
+    delta_action = np.asarray(action, dtype=np.float32)
+
+    if cfg.delta_gripper:
+        env_action += delta_action
+    else:
+        env_action[:6] += delta_action[:6]
+        env_action[7:13] += delta_action[7:13]
+        env_action[[6, 13]] = delta_action[[6, 13]]
+        env_action[[6, 13]] = np.clip(env_action[[6, 13]], 0.0, 1.0)
+
+    return env_action
+
+
 def eval(TASK_ENV, model: Model, observation: dict):
     observation["language"] = TASK_ENV.get_instruction()
 
     actions = model.get_action(observation)
     for action in actions:
-        TASK_ENV.take_action(action)
+        env_action = convert_action_for_env(action, observation, model.cfg)
+        TASK_ENV.take_action(env_action)
         observation = TASK_ENV.get_obs()
-

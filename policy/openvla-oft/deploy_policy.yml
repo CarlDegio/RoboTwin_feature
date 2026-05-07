@@ -20,3 +20,5 @@ num_images_in_input: 1
 unnorm_key: robotwin4stack_aloha
 num_open_loop_steps: 25
 lora_rank: 32
+action_mode: absolute  # absolute or delta
+delta_gripper: false
