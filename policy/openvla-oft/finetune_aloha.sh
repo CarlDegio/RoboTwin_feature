@@ -19,7 +19,7 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   --grad_accumulation_steps 1 \
   --use_proprio True \
   --batch_size 8 \
-  --learning_rate 5e-4 \
+  --learning_rate 2e-4 \
   --num_steps_before_decay 50000 \
   --max_steps 50005 \
   --use_val_set True \
