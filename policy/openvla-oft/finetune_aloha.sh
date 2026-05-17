@@ -14,12 +14,12 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   --run_root_dir ckpts \
   --use_l1_regression False \
   --use_diffusion False \
-  --use_film True \
+  --use_film False \
   --num_images_in_input 1 \
   --grad_accumulation_steps 1 \
   --use_proprio True \
   --batch_size 8 \
-  --learning_rate 2e-4 \
+  --learning_rate 5e-4 \
   --num_steps_before_decay 50000 \
   --max_steps 50005 \
   --use_val_set True \
@@ -30,7 +30,7 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   --lora_rank 32 \
   --wandb_entity "carldegio" \
   --wandb_project "openvla-oft" \
-  --run_id_override "discrete_1frame_prop_rand_delta_actions" \
+  --run_id_override "discrete_1frame_prop_rand_abs_actions" \
   --run_id_note some_run_id_note \
   # --resume True \
   # --resume_step 60000 \

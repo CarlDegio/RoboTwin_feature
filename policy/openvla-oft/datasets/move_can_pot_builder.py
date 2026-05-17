@@ -8,7 +8,7 @@ import random
 from datasets.conversion_utils import MultiThreadedDatasetBuilder
 tfds.core.constants.DATA_DIR = "/mnt/tensorflow_datasets"
 
-ACTION_MODE = os.environ.get("OPENVLA_ACTION_MODE", "delta").lower()
+ACTION_MODE = os.environ.get("OPENVLA_ACTION_MODE", "absolute").lower()
 DELTA_GRIPPER = os.environ.get("OPENVLA_DELTA_GRIPPER", "false").lower() in (
     "1",
     "true",
