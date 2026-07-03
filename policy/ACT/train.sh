@@ -17,10 +17,10 @@ python3 imitate_episodes.py \
     --kl_weight 10 \
     --chunk_size 50 \
     --hidden_dim 512 \
-    --batch_size 32 \
+    --batch_size 28 \
     --dim_feedforward 3200 \
     --num_epochs 6000 \
-    --lr 5e-5 \
+    --lr 3e-5 \
     --save_freq 2000 \
     --state_dim 14 \
     --seed ${seed}

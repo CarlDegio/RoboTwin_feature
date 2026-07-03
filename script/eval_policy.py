@@ -71,7 +71,7 @@ def main(usr_args):
     instruction_type = usr_args["instruction_type"]
     save_dir = None
     video_save_dir = None
-    video_size = None
+    video_sizes = None
 
     get_model = eval_function_decorator(policy_name, "get_model")
 
@@ -126,8 +126,13 @@ def main(usr_args):
 
     if args["eval_video_log"]:
         video_save_dir = save_dir
-        camera_config = get_camera_config(args["camera"]["head_camera_type"])
-        video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
+        head_camera_config = get_camera_config(args["camera"]["head_camera_type"])
+        wrist_camera_config = get_camera_config(args["camera"]["wrist_camera_type"])
+        video_sizes = {
+            "head_camera": f"{head_camera_config['w']}x{head_camera_config['h']}",
+            "left_camera": f"{wrist_camera_config['w']}x{wrist_camera_config['h']}",
+            "right_camera": f"{wrist_camera_config['w']}x{wrist_camera_config['h']}",
+        }
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
@@ -159,7 +164,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    test_num = 50
     topk = 1
 
     model = get_model(usr_args)
@@ -169,7 +174,7 @@ def main(usr_args):
                                    model,
                                    st_seed,
                                    test_num=test_num,
-                                   video_size=video_size,
+                                   video_sizes=video_sizes,
                                    instruction_type=instruction_type)
     suc_nums.append(suc_num)
 
@@ -192,7 +197,7 @@ def eval_policy(task_name,
                 model,
                 st_seed,
                 test_num=100,
-                video_size=None,
+                video_sizes=None,
                 instruction_type=None):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
@@ -260,33 +265,38 @@ def eval_policy(task_name,
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
         if TASK_ENV.eval_video_path is not None:
-            ffmpeg = subprocess.Popen(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "rawvideo",
-                    "-pixel_format",
-                    "rgb24",
-                    "-video_size",
-                    video_size,
-                    "-framerate",
-                    "10",
-                    "-i",
-                    "-",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-vcodec",
-                    "libx264",
-                    "-crf",
-                    "23",
-                    f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
-                ],
-                stdin=subprocess.PIPE,
-            )
-            TASK_ENV._set_eval_video_ffmpeg(ffmpeg)
+            ffmpeg_processes = {}
+            for camera_name, video_size in video_sizes.items():
+                ffmpeg_processes[camera_name] = subprocess.Popen(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pixel_format",
+                        "rgb24",
+                        "-video_size",
+                        video_size,
+                        "-framerate",
+                        "10",
+                        "-i",
+                        "-",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vcodec",
+                        "libx264",
+                        "-crf",
+                        "23",
+                        os.path.join(
+                            str(TASK_ENV.eval_video_path),
+                            f"episode{TASK_ENV.test_num}_{camera_name}.mp4",
+                        ),
+                    ],
+                    stdin=subprocess.PIPE,
+                )
+            TASK_ENV._set_eval_video_ffmpeg(ffmpeg_processes)
 
         succ = False
         reset_func(model)

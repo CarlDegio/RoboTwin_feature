@@ -98,6 +98,7 @@ class Base_Task(gym.Env):
         self.now_obs = {}
         self.take_action_cnt = 0
         self.eval_video_path = kwags.get("eval_video_save_dir", None)
+        self.eval_video_ffmpeg = None
 
         self.save_freq = kwags.get("save_freq")
         self.world_pcd = None
@@ -575,6 +576,10 @@ class Base_Task(gym.Env):
     def _set_eval_video_ffmpeg(self, ffmpeg):
         self.eval_video_ffmpeg = ffmpeg
 
+    def _write_eval_video_frame(self):
+        for camera_name, ffmpeg in self.eval_video_ffmpeg.items():
+            ffmpeg.stdin.write(self.now_obs["observation"][camera_name]["rgb"].tobytes())
+
     def close_env(self, clear_cache=False):
         if clear_cache:
             # for actor in self.scene.get_all_actors():
@@ -584,9 +589,10 @@ class Base_Task(gym.Env):
 
     def _del_eval_video_ffmpeg(self):
         if self.eval_video_ffmpeg:
-            self.eval_video_ffmpeg.stdin.close()
-            self.eval_video_ffmpeg.wait()
-            del self.eval_video_ffmpeg
+            for ffmpeg in self.eval_video_ffmpeg.values():
+                ffmpeg.stdin.close()
+                ffmpeg.wait()
+            self.eval_video_ffmpeg = None
 
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
@@ -1482,7 +1488,7 @@ class Base_Task(gym.Env):
 
         eval_video_freq = 1  # fixed
         if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
-            self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+            self._write_eval_video_frame()
 
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
@@ -1658,7 +1664,7 @@ class Base_Task(gym.Env):
                 self.eval_success = True
                 self.get_obs() # update obs
                 if (self.eval_video_path is not None):
-                    self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                    self._write_eval_video_frame()
                 return
 
         self._update_render()
