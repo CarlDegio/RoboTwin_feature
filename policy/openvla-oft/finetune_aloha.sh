@@ -6,6 +6,10 @@
 # export GLOO_SOCKET_IFNAME=lo
 # export MASTER_ADDR=127.0.0.1
 # export NCCL_P2P_LEVEL=0
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
+export NO_PROXY=localhost,127.0.0.1
+# export WANDB_MODE=disabled
 torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   vla-scripts/finetune.py \
   --vla_path openvla/openvla-7b \
@@ -15,23 +19,27 @@ torchrun --standalone --nnodes 1 --nproc-per-node 8 \
   --use_l1_regression False \
   --use_diffusion False \
   --use_film False \
-  --num_images_in_input 1 \
+  --num_images_in_input 3 \
   --grad_accumulation_steps 1 \
   --use_proprio True \
-  --batch_size 8 \
-  --learning_rate 5e-4 \
-  --num_steps_before_decay 50000 \
-  --max_steps 50005 \
+  --batch_size 16 \
+  --learning_rate 1e-3 \
+  --num_steps_before_decay 5000 \
+  --max_steps 10005 \
   --use_val_set True \
-  --val_freq 1000 \
-  --save_freq 25000 \
+  --val_freq 500 \
+  --save_freq 10000 \
   --save_latest_checkpoint_only False \
   --image_aug True \
   --lora_rank 32 \
   --wandb_entity "carldegio" \
   --wandb_project "openvla-oft" \
-  --run_id_override "discrete_1frame_prop_rand_abs_actions" \
+  --run_id_override "discrete_3frame_prop_rand_abs_actions_bs16" \
   --run_id_note some_run_id_note \
+  --enable_activation_checkpointing True \
+  --activation_checkpoint_scope llm \
+  --activation_checkpoint_use_reentrant False \
+  --activation_checkpoint_llm_every 1
   # --resume True \
   # --resume_step 60000 \
   # --resume_base_model_path openvla/openvla-7b \

@@ -524,8 +524,18 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         output_projector_features = output_projector_features if output_projector_features is not None else False
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # Respect `use_cache` only if not training (even if `gradient_checkpointing` is off)
-        use_cache = use_cache and not self.training
+        # Disable KV caching for training/evaluation loss passes. Activation checkpoint
+        # recomputation is incompatible with mutable HF cache objects because repeated
+        # layer forwards can append to the cache and double the effective key/value
+        # sequence length. OpenVLAConfig stores the LLM cache default on text_config.
+        if self.training or labels is not None:
+            use_cache = False
+        elif use_cache is None:
+            use_cache = getattr(
+                self.config,
+                "use_cache",
+                getattr(self.config.text_config, "use_cache", False),
+            )
 
         # Instantiate Placeholder for Projector Features
         projected_patch_embeddings = None

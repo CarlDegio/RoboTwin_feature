@@ -8,6 +8,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Type
 
@@ -111,6 +112,11 @@ class FinetuneConfig:
     resume_checkpoint_path: Optional[str] = None      # Directory containing saved checkpoint artifacts for resuming
     image_aug: bool = True                           # If True, trains with image augmentations (HIGHLY RECOMMENDED)
     diffusion_sample_freq: int = 50                  # (When `use_diffusion==True`) Frequency for sampling in steps
+    enable_activation_checkpointing: bool = False     # If True, checkpoint selected transformer blocks to reduce memory
+    activation_checkpoint_scope: str = "llm"          # One of "llm", "vision", or "llm+vision"
+    activation_checkpoint_use_reentrant: bool = False # Prefer non-reentrant checkpointing for modern PyTorch
+    activation_checkpoint_llm_every: int = 1          # Checkpoint every Nth LLM layer (1 = all selected layers)
+    activation_checkpoint_vision_every: int = 1       # Checkpoint every Nth vision block (1 = all selected blocks)
 
     # LoRA
     use_lora: bool = True                            # If True, uses LoRA fine-tuning
@@ -259,6 +265,122 @@ def wrap_ddp(module: nn.Module, device_id: int, find_unused: bool = False) -> nn
         return IdentityWrapper(module)
 
 
+def apply_activation_checkpointing_to_vla(
+    vla: nn.Module,
+    scope: str,
+    use_reentrant: bool = False,
+    llm_every: int = 1,
+    vision_every: int = 1,
+) -> None:
+    """
+    Apply PyTorch activation checkpointing to selected OpenVLA submodules before DDP wrapping.
+
+    Args:
+        vla: OpenVLA model after LoRA/FiLM modifications and before DDP wrapping.
+        scope: Which module families to checkpoint. Supports "llm", "vision", and "llm+vision".
+        use_reentrant: Whether to use the legacy reentrant checkpoint implementation.
+        llm_every: Checkpoint every Nth LLM layer among matched LLM layers.
+        vision_every: Checkpoint every Nth vision block among matched vision blocks.
+    """
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        CheckpointImpl,
+        apply_activation_checkpointing,
+        checkpoint_wrapper,
+    )
+    from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+
+    normalized_scope = scope.replace(",", "+").lower()
+    requested_scopes = {part.strip() for part in normalized_scope.split("+") if part.strip()}
+    valid_scopes = {"llm", "vision"}
+    unknown_scopes = requested_scopes - valid_scopes
+    if not requested_scopes or unknown_scopes:
+        raise ValueError(
+            f"activation_checkpoint_scope must contain only {sorted(valid_scopes)}, got {scope!r}"
+        )
+    if llm_every < 1 or vision_every < 1:
+        raise ValueError(
+            "activation checkpoint intervals must be positive integers, "
+            f"got llm_every={llm_every}, vision_every={vision_every}"
+        )
+
+    checkpoint_impl = (
+        CheckpointImpl.REENTRANT
+        if use_reentrant
+        else CheckpointImpl.NO_REENTRANT
+    )
+    checkpoint_wrapper_fn = partial(
+        checkpoint_wrapper,
+        checkpoint_impl=checkpoint_impl,
+    )
+
+    check_fns = []
+    checkpointed_llm_layers = set()
+    if "llm" in requested_scopes:
+        llm_layers = [
+            module
+            for module in vla.modules()
+            if isinstance(module, LlamaDecoderLayer)
+        ]
+        checkpointed_llm_layers = {
+            module for idx, module in enumerate(llm_layers) if idx % llm_every == 0
+        }
+        check_fns.append(lambda module: module in checkpointed_llm_layers)
+
+    checkpointed_vision_blocks = set()
+    if "vision" in requested_scopes:
+        from timm.models.vision_transformer import Block as TimmVisionTransformerBlock
+
+        vision_block_types = (TimmVisionTransformerBlock,)
+        try:
+            from prismatic.models.film_vit_wrapper import (
+                FiLMedVisionTransformerBlock,
+                NullVisionTransformerBlockWrapper,
+            )
+
+            film_block_types = (
+                FiLMedVisionTransformerBlock,
+                NullVisionTransformerBlockWrapper,
+            )
+            if any(isinstance(module, film_block_types) for module in vla.modules()):
+                vision_block_types = film_block_types
+        except ImportError:
+            pass
+
+        vision_blocks = [
+            module
+            for module in vla.modules()
+            if isinstance(module, vision_block_types)
+        ]
+        checkpointed_vision_blocks = {
+            module for idx, module in enumerate(vision_blocks) if idx % vision_every == 0
+        }
+        check_fns.append(lambda module: module in checkpointed_vision_blocks)
+
+    def check_fn(module: nn.Module) -> bool:
+        return any(fn(module) for fn in check_fns)
+
+    matched_modules = sum(1 for module in vla.modules() if check_fn(module))
+    if matched_modules == 0:
+        print(
+            "[WARNING] Activation checkpointing requested, but no matching "
+            f"modules found for scope={scope!r}."
+        )
+        return
+
+    apply_activation_checkpointing(
+        vla,
+        checkpoint_wrapper_fn=checkpoint_wrapper_fn,
+        check_fn=check_fn,
+    )
+    print(
+        "[INFO] Applied activation checkpointing "
+        f"(scope={scope}, use_reentrant={use_reentrant}, "
+        f"llm_layers={len(checkpointed_llm_layers)}, llm_every={llm_every}, "
+        f"vision_blocks={len(checkpointed_vision_blocks)}, vision_every={vision_every}, "
+        f"matched_modules={matched_modules})."
+    )
+
+
 def count_parameters(module: nn.Module, name: str) -> None:
     """
     Counts and prints the number of trainable parameters in a module.
@@ -384,6 +506,8 @@ def run_forward_pass(
 
     # 迁移整个 batch
     batch = move_to_device(batch, device)
+    needs_hidden_states = use_l1_regression or use_diffusion
+
     # VLA forward pass
     with torch.autocast("cuda", dtype=torch.bfloat16):
         output: CausalLMOutputWithPast = vla(
@@ -391,7 +515,7 @@ def run_forward_pass(
             attention_mask=batch["attention_mask"].to(device_id),
             pixel_values=batch["pixel_values"].to(torch.bfloat16).to(device_id),
             labels=batch["labels"],
-            output_hidden_states=True,
+            output_hidden_states=needs_hidden_states,
             proprio=batch["proprio"] if use_proprio else None,
             proprio_projector=proprio_projector if use_proprio else None,
             noisy_actions=noisy_actions if use_diffusion else None,
@@ -1059,6 +1183,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
             trust_remote_code=True,
+            attn_implementation="flash_attention_2",
         ).to(device_id)
     else:
         processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
@@ -1067,6 +1192,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
             trust_remote_code=True,
+            attn_implementation="flash_attention_2",
         ).to(device_id)
 
     # Set number of images in VLA input
@@ -1114,6 +1240,15 @@ def finetune(cfg: FinetuneConfig) -> None:
             )
             vla.model.vision_backbone.load_state_dict(state_dict)
         vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
+
+    if cfg.enable_activation_checkpointing:
+        apply_activation_checkpointing_to_vla(
+            vla,
+            scope=cfg.activation_checkpoint_scope,
+            use_reentrant=cfg.activation_checkpoint_use_reentrant,
+            llm_every=cfg.activation_checkpoint_llm_every,
+            vision_every=cfg.activation_checkpoint_vision_every,
+        )
 
     # Wrap VLA with DDP
     vla = wrap_ddp(vla, device_id, find_unused=True)
