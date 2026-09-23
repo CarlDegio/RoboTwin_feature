@@ -497,16 +497,16 @@ class TrainConfig:
     batch_size: int = 32
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
-    num_workers: int = 2
+    num_workers: int = 8
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
-    save_interval: int = 1000
+    save_interval: int = 5000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
-    keep_period: int | None = 5000
+    keep_period: int | None = 15000
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -554,10 +554,10 @@ _CONFIGS = [
     ###
     # pi05_base by full
     TrainConfig(
-        name="pi05_aloha_full_base",
+        name="pi05_dynamic_head_full_base",
         model=pi0_config.Pi0Config(pi05=True),
         data=LeRobotAlohaDataConfig(
-            repo_id="your_repo_id",
+            repo_id="pi05_dynamic_head",
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(inputs=[
                 _transforms.RepackTransform({
@@ -576,9 +576,15 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=20_000,
-        batch_size=64,
-        fsdp_devices=1,  # refer line 359
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=1e-4,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        num_train_steps=30_000,
+        batch_size=256,
+        fsdp_devices=8,  # refer line 359
     ),
     # pi05_base by lora
     TrainConfig(
