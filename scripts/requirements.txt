@@ -1,5 +1,6 @@
-torch==2.4.1
-torchvision
+# Install the CUDA 12.8 wheels first (see LOCAL_SETUP.md).
+torch==2.7.1
+torchvision==0.22.1
 # RoboTwin native extensions currently require the NumPy 1.x ABI.
 numpy==1.26.4
 opencv-python==4.10.0.84

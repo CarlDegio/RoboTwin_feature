@@ -1,0 +1,6 @@
+# Start with one task and one worker. Override the checkpoint via --ckpt-name.
+gpu_ids: "7"
+jobs_per_gpu: 1
+num_workers: 1
+tasks:
+  - stack_bowls_two
