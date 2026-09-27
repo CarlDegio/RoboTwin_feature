@@ -17,12 +17,16 @@ import time
 from argparse import ArgumentParser
 
 from description.utils.generate_episode_instructions import generate_episode_descriptions
+from envs.color_order_goal import TASK_NAME as COLOR_ORDER_TASK, collection_order, resolve_order, validate_episode_info
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 
 def build_episode_instructions(args, episode_info, episode_idx):
+    strict = args['task_name'] == COLOR_ORDER_TASK
+    if strict:
+        validate_episode_info(episode_info)
     fallback = args["task_name"].replace("_", " ")
     info = episode_info.get("info", {}) if isinstance(episode_info, dict) else {}
     generated = generate_episode_descriptions(
@@ -36,6 +40,8 @@ def build_episode_instructions(args, episode_info, episode_idx):
     episode_descriptions["episode_index"] = episode_idx
     for split in ("seen", "unseen"):
         if not episode_descriptions.get(split):
+            if strict:
+                raise ValueError(f'Missing {split} instructions for color-order goal')
             episode_descriptions[split] = [fallback]
 
     instruction_dir = os.path.join(args["save_path"], "instruction")
@@ -74,7 +80,7 @@ def get_embodiment_config(robot_file):
     return embodiment_args
 
 
-def main(task_name=None, task_config=None):
+def main(task_name=None, task_config=None, episode_num=None, target_order=None):
 
     task = class_decorator(task_name)
     config_path = os.path.join(CONFIGS_PATH, f"{task_config}.yml")
@@ -83,6 +89,10 @@ def main(task_name=None, task_config=None):
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
 
     args['task_name'] = task_name
+    if episode_num is not None:
+        args['episode_num'] = episode_num
+    if target_order is not None:
+        args['target_order'] = target_order
 
     embodiment_type = args.get("embodiment")
     embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
@@ -150,7 +160,20 @@ def main(task_name=None, task_config=None):
 
 
 def run(TASK_ENV, args):
-    epid, suc_num, fail_num, seed_list = 0, 0, 0, []
+    epid, suc_num, fail_num, seed_list = int(args.get('start_seed', 0)), 0, 0, []
+    if args['episode_num'] <= 0:
+        raise ValueError('episode_num must be positive')
+    if args['task_name'] == COLOR_ORDER_TASK:
+        resolve_order(args.get('target_order', 'random'), epid)
+
+    def episode_args(index):
+        result = dict(args)
+        if args['task_name'] == COLOR_ORDER_TASK:
+            result['target_order'] = collection_order(
+                args.get('target_order', 'random'), index,
+                balanced=args.get('balance_orders', True),
+            )
+        return result
 
     print(f"Task Name: \033[34m{args['task_name']}\033[0m")
 
@@ -171,8 +194,10 @@ def run(TASK_ENV, args):
             print(f"Exist seed file, Start from: {epid} / {suc_num}")
 
         while suc_num < args["episode_num"]:
+            if fail_num >= args.get('max_seed_attempts', 10000):
+                raise RuntimeError('Collection reached max_seed_attempts failed seeds')
             try:
-                TASK_ENV.setup_demo(now_ep_num=suc_num, seed=epid, **args)
+                TASK_ENV.setup_demo(now_ep_num=suc_num, seed=epid, **episode_args(suc_num))
                 TASK_ENV.play_once()
 
                 if TASK_ENV.plan_success and TASK_ENV.check_success():
@@ -253,14 +278,24 @@ def run(TASK_ENV, args):
             return os.path.exists(file_path)
 
         while exist_hdf5(st_idx):
+            if args['task_name'] == COLOR_ORDER_TASK:
+                import h5py
+                from envs.color_order_goal import episode_info as color_episode_info
+                with h5py.File(os.path.join(args['save_path'], 'data', f'episode_{st_idx:07d}.hdf5')) as f:
+                    saved_goal = json.loads(f['additional_info/task_goal'].asstr()[()])
+                expected_goal = color_episode_info(episode_args(st_idx)['target_order'], seed_list[st_idx])['task_goal']
+                if saved_goal != expected_goal:
+                    raise ValueError('Existing data uses a different color-order goal; use a new output config')
             st_idx += 1
 
         for episode_idx in range(st_idx, args["episode_num"]):
             print(f"\033[34mTask name: {args['task_name']}\033[0m")
 
-            TASK_ENV.setup_demo(now_ep_num=episode_idx, seed=seed_list[episode_idx], **args)
+            TASK_ENV.setup_demo(now_ep_num=episode_idx, seed=seed_list[episode_idx], **episode_args(episode_idx))
 
             traj_data = TASK_ENV.load_tran_data(episode_idx)
+            if args['task_name'] == COLOR_ORDER_TASK and traj_data.get('task_goal') != TASK_ENV.info['task_goal']:
+                raise ValueError('Planned trajectory goal does not match replay goal; use a new output config')
             args["left_joint_path"] = traj_data["left_joint_path"]
             args["right_joint_path"] = traj_data["right_joint_path"]
             TASK_ENV.set_path_lst(args)
@@ -275,6 +310,9 @@ def run(TASK_ENV, args):
                 info_db = json.load(file)
 
             info = TASK_ENV.play_once()
+            if not TASK_ENV.check_success():
+                TASK_ENV.close_env()
+                raise RuntimeError(f'Collection replay failed for episode {episode_idx}; data was not published')
             info_db[f"episode_{episode_idx}"] = info
 
             with open(info_file_path, "w", encoding="utf-8") as file:
@@ -286,7 +324,6 @@ def run(TASK_ENV, args):
                 instructions=episode_descriptions["seen"],
             )
             TASK_ENV.remove_data_cache()
-            assert TASK_ENV.check_success(), "Collect Error"
 
 
 if __name__ == "__main__":
@@ -299,8 +336,10 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("task_name", type=str)
     parser.add_argument("task_config", type=str)
+    parser.add_argument('--episode-num', type=int)
+    parser.add_argument('--target-order', choices=('random', 'RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'))
     parser = parser.parse_args()
     task_name = parser.task_name
     task_config = parser.task_config
 
-    main(task_name=task_name, task_config=task_config)
+    main(task_name=task_name, task_config=task_config, episode_num=parser.episode_num, target_order=parser.target_order)

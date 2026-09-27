@@ -596,6 +596,8 @@ class Base_Task(gym.Env):
             "left_joint_path": deepcopy(self.left_joint_path),
             "right_joint_path": deepcopy(self.right_joint_path),
         }
+        if 'task_goal' in self.info:
+            traj_data['task_goal'] = deepcopy(self.info['task_goal'])
         save_pkl(file_path, traj_data)
 
     def load_tran_data(self, idx):
@@ -621,6 +623,7 @@ class Base_Task(gym.Env):
             target_video_path,
             instructions=instructions,
             frequency=int(self.save_freq or 15),
+            task_goal=self.info.get('task_goal'),
         )
 
     def remove_data_cache(self):

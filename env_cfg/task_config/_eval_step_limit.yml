@@ -1,6 +1,7 @@
 adjust_bottle: 400
 beat_block_hammer: 400
 blocks_ranking_rgb: 1200
+blocks_ranking_color_order: 1200
 blocks_ranking_size: 1200
 click_alarmclock: 400
 click_bell: 400

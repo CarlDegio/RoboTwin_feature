@@ -1,0 +1,18 @@
+{
+  "full_description": "Arrange the three colored blocks in a row, with {A}, {B}, and {C} from left to right.",
+  "schema": "{A} is the leftmost target block, {B} the middle target block, and {C} the rightmost target block. Left-to-right means increasing world x, as in the original blocks_ranking_rgb task.",
+  "preference": "Describe the final spatial arrangement only. Do not prescribe grasp order or which arm to use.",
+  "seen": [
+    "Arrange {A}, {B}, and {C} in a row from left to right.",
+    "Place {A} on the left, {B} in the middle, and {C} on the right, forming one row.",
+    "Make a horizontal row whose left-to-right order is {A}, {B}, and {C}.",
+    "Line up the blocks from left to right as {A}, {B}, and {C}.",
+    "The final row should have {A} at the left, {B} at the center, and {C} at the right.",
+    "Set the blocks side by side in this left-to-right order: {A}, {B}, {C}."
+  ],
+  "unseen": [
+    "Reading the completed row from left to right, the colors should be {A}, {B}, and {C}.",
+    "Form a single row: leftmost {A}, middle {B}, rightmost {C}.",
+    "The required left-to-right arrangement is {A}, {B}, and {C}, all in one row."
+  ]
+}

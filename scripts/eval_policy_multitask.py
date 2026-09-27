@@ -35,6 +35,7 @@ from rich.progress import (
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
 TASK_CONFIG_ROOT = ROBOTWIN_ROOT / "env_cfg" / "task_config"
 EVAL_OVERRIDE_FLAGS = {
+    "target_order": "--target_order",
     "eval_batch": "--eval_batch",
     "task_config": "--task_config",
     "test_num": "--test_num",
@@ -235,6 +236,7 @@ def parse_args() -> argparse.Namespace:
         help="Override jobs_per_gpu from the scheduler config.",
     )
     parser.add_argument("--task-config", default="demo_clean")
+    parser.add_argument("--target-order", choices=("random", "RGB", "RBG", "GRB", "GBR", "BRG", "BGR"))
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--eval-batch", action="store_true")
     parser.add_argument(
@@ -361,6 +363,7 @@ def expand_jobs(
             raise ConfigError(f"--{field.replace('_', '-')} must be greater than zero.")
 
     overrides = {
+        "target_order": cli.target_order,
         "eval_batch": cli.eval_batch or num_workers > 1,
         "task_config": cli.task_config,
         "test_num": cli.test_num,

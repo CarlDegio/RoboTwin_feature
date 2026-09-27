@@ -76,7 +76,7 @@ def _to_4x4(values):
     return values
 
 
-def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
+def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency, *, task_goal=None):
     joints = data["joint_action"]
     frame_num = len(joints["left_arm"])
     if frame_num < 2:
@@ -99,6 +99,10 @@ def create_xpolicylab_hdf5(data, hdf5_path, instructions, frequency):
         f.create_group("additional_info").create_dataset(
             "frequency", data=np.asarray(frequency, dtype=np.int32)
         )
+        if task_goal is not None:
+            f['additional_info'].create_dataset(
+                'task_goal', data=json.dumps(task_goal), dtype=string_dtype,
+            )
 
         state = f.create_group("state")
         action = f.create_group("action")
@@ -175,6 +179,7 @@ def pkl_files_to_hdf5_and_video(
     *,
     instructions=None,
     frequency=15,
+    task_goal=None,
 ):
     data_list = parse_dict_structure(load_pkl_file(pkl_files[0]))
     for pkl_file_path in pkl_files:
@@ -182,7 +187,7 @@ def pkl_files_to_hdf5_and_video(
         append_data_to_structure(data_list, pkl_file)
 
     images_to_video(np.array(data_list["observation"]["head_camera"]["rgb"]), out_path=video_path)
-    return create_xpolicylab_hdf5(data_list, hdf5_path, instructions, frequency)
+    return create_xpolicylab_hdf5(data_list, hdf5_path, instructions, frequency, task_goal=task_goal)
 
 
 def process_folder_to_hdf5_video(
@@ -192,6 +197,7 @@ def process_folder_to_hdf5_video(
     *,
     instructions=None,
     frequency=15,
+    task_goal=None,
 ):
     pkl_files = []
     for fname in os.listdir(folder_path):
@@ -217,4 +223,5 @@ def process_folder_to_hdf5_video(
         video_path,
         instructions=instructions,
         frequency=frequency,
+        task_goal=task_goal,
     )

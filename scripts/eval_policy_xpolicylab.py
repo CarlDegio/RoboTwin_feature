@@ -4,6 +4,7 @@ import argparse
 import ast
 import copy
 import importlib
+import json
 import multiprocessing as mp
 import os
 import queue
@@ -28,6 +29,7 @@ for path in (ROBOTWIN_ROOT, ROBOTWIN_ROOT / "scripts", ROBOTWIN_ROOT / "descript
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
+from envs.color_order_goal import TASK_NAME as COLOR_ORDER_TASK, validate_episode_info, summarize_results
 from envs import CONFIGS_PATH
 from envs.utils.create_actor import UnStableError
 from generate_episode_instructions import generate_episode_descriptions
@@ -174,6 +176,8 @@ def load_task_args(usr_args: dict[str, Any]) -> tuple[dict[str, Any], str]:
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
     args["policy_name"] = usr_args["policy_name"]
+    if usr_args.get('target_order') is not None:
+        args['target_order'] = usr_args['target_order']
     ensure_xpolicylab_observation_flags(args)
 
     embodiment_type = args.get("embodiment")
@@ -287,6 +291,7 @@ def main(usr_args: dict[str, Any]) -> None:
         task_name, policy_name, task_config, ckpt_setting, current_time
     )
     save_dir.mkdir(parents=True, exist_ok=True)
+    args["eval_result_dir"] = str(save_dir)
     video_size = None
 
     if args["eval_video_log"]:
@@ -351,6 +356,7 @@ def main_batch(usr_args: dict[str, Any]) -> None:
         task_name, policy_name, task_config, ckpt_setting, current_time
     )
     save_dir.mkdir(parents=True, exist_ok=True)
+    args["eval_result_dir"] = str(save_dir)
     video_size = None
 
     if args["eval_video_log"]:
@@ -423,6 +429,7 @@ def main_batch(usr_args: dict[str, Any]) -> None:
     completed = 0
     success_num = 0
     skipped = 0
+    color_order_records = []
     worker_done = 0
 
     try:
@@ -441,6 +448,9 @@ def main_batch(usr_args: dict[str, Any]) -> None:
             if msg_type == "episode_done":
                 if completed < test_num:
                     completed += 1
+                    if task_name == COLOR_ORDER_TASK:
+                        color_order_records.append(message)
+                        write_color_order_results(args, color_order_records)
                     success_num += int(bool(message.get("success")))
                     print(
                         f"\033[93m{task_name}\033[0m | episode={message.get('episode_id')} | "
@@ -657,6 +667,7 @@ def run_one_batch_episode(
         print(f"skip unstable seed={seed_value} (eval setup)")
         return {"type": "seed_skipped", "worker_id": worker_id, "seed": seed_value, "reason": "unstable"}
 
+    episode_info = active_episode_info(args, task_env, episode_info)
     instruction = build_instruction(args, episode_info, instruction_type, test_num)
     task_env.set_instruction(instruction=instruction)
 
@@ -752,6 +763,8 @@ def run_one_batch_episode(
         "worker_id": worker_id,
         "seed": seed_value,
         "success": bool(succ),
+        "order_id": episode_info.get("task_goal", {}).get("order_id"),
+        "instruction": instruction,
     }
 
 
@@ -796,6 +809,7 @@ def eval_remote_policy(
     clear_cache_freq = args["clear_cache_freq"]
     args["eval_mode"] = True
     consecutive_env_errors = 0
+    color_order_records = []
 
     while succ_seed < test_num:
         render_freq = args["render_freq"]
@@ -841,6 +855,7 @@ def eval_remote_policy(
 
         succ_seed += 1
 
+        episode_info = active_episode_info(args, task_env, episode_info)
         instruction = build_instruction(args, episode_info, instruction_type, test_num)
         task_env.set_instruction(instruction=instruction)
 
@@ -955,6 +970,12 @@ def eval_remote_policy(
         else:
             print("\033[91mFail!\033[0m")
 
+        if task_name == COLOR_ORDER_TASK:
+            color_order_records.append({
+                'seed': now_seed, 'order_id': episode_info['task_goal']['order_id'],
+                'instruction': instruction, 'success': bool(succ),
+            })
+            write_color_order_results(args, color_order_records)
         now_id += 1
         task_env.close_env(clear_cache=((succ_seed + 1) % clear_cache_freq == 0))
 
@@ -974,7 +995,32 @@ def eval_remote_policy(
     return now_seed, task_env.suc
 
 
+def active_episode_info(args, task_env, expert_info):
+    if args['task_name'] != COLOR_ORDER_TASK:
+        return expert_info
+    live = task_env.info
+    validate_episode_info(live)
+    if expert_info.get('task_goal') and expert_info['task_goal'] != live['task_goal']:
+        raise ValueError('Expert check and policy rollout have different color-order goals')
+    return live
+
+
+def write_color_order_results(args, records):
+    path = Path(args['eval_result_dir']) / 'color_order_results.json'
+    payload = {**summarize_results(records), 'episodes': records}
+    path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+
+
 def build_instruction(args: dict[str, Any], episode_info: dict[str, Any], instruction_type: str | None, test_num: int) -> str:
+    if args['task_name'] == COLOR_ORDER_TASK:
+        validate_episode_info(episode_info)
+        if instruction_type not in ('seen', 'unseen'):
+            raise ValueError('Color-order evaluation requires seen or unseen instructions')
+        results = generate_episode_descriptions(args['task_name'], [episode_info['info']], max(1, test_num))
+        candidates = results[0].get(instruction_type) if results else None
+        if not candidates:
+            raise ValueError('No valid language instruction for the color-order goal')
+        return str(np.random.choice(candidates))
     if not instruction_type:
         return args["task_name"]
 
@@ -1344,6 +1390,7 @@ def parse_args() -> dict[str, Any]:
     parser.add_argument("--test_num", type=int, default=None)
     parser.add_argument("--instruction_type", choices=("seen", "unseen"))
     parser.add_argument("--expert_check", default=None)
+    parser.add_argument("--target_order", choices=("random", "RGB", "RBG", "GRB", "GBR", "BRG", "BGR"))
     parser.add_argument("--frequency", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--max_seed_attempts", type=int, default=None)
@@ -1370,6 +1417,8 @@ def parse_args() -> dict[str, Any]:
         usr_args["test_num"] = args.test_num
     if args.expert_check is not None:
         usr_args["expert_check"] = parse_bool(args.expert_check)
+    if args.target_order is not None:
+        usr_args['target_order'] = args.target_order
     if args.frequency is not None:
         usr_args["frequency"] = args.frequency
     if args.num_workers is not None:

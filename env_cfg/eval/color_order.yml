@@ -1,0 +1,5 @@
+gpu_ids: "7"
+jobs_per_gpu: 1
+num_workers: 1
+tasks:
+  - blocks_ranking_color_order
