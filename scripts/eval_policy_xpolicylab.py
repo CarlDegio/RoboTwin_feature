@@ -1089,6 +1089,12 @@ def robotwin_obs_to_xpolicylab(
     task_env: Any | None = None,
 ) -> dict[str, Any]:
     instruction_text = instruction or observation.get("language") or ""
+    additional_info = {"frequency": int(frequency)}
+    # Used only to choose the matching visual demonstration. The ICL adapter
+    # removes this metadata and all instruction text before model inference.
+    goal = getattr(task_env, "info", {}).get("task_goal") if task_env is not None else None
+    if goal is not None:
+        additional_info["task_goal"] = dict(goal)
     return {
         "data_format_version": "v1.0",
         "instruction": instruction_text,
@@ -1096,7 +1102,7 @@ def robotwin_obs_to_xpolicylab(
         "env_idx": int(env_idx),
         "vision": convert_vision(observation),
         "state": convert_state(observation, task_env=task_env),
-        "additional_info": {"frequency": int(frequency)},
+        "additional_info": additional_info,
     }
 
 

@@ -1,5 +1,7 @@
 # Local RoboTwin / Pi_05 setup
 
+> 当前 B200 主机（2026-09-28）的路径、激活方式和采集说明见 [docs/setup_b200_20260928.md](docs/setup_b200_20260928.md)。下文保留此前 H20 主机的安装记录。
+
 This checkout is configured for Ubuntu 24.04 and NVIDIA H20. Local changes
 are not committed. PyTorch3D is intentionally omitted; RGB collection and
 evaluation configurations keep `data_type.pointcloud: false`.

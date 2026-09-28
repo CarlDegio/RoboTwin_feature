@@ -1,4 +1,4 @@
 [submodule "XPolicyLab"]
 	path = XPolicyLab
-	url = https://github.com/XPolicyLab/XPolicyLab.git
-	branch = main
+	url = https://github.com/CarlDegio/XPolicyLab.git
+	branch = pi05_icl
